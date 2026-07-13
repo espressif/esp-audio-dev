@@ -1,0 +1,22 @@
+version: "2.0.0-beta1"
+description: Audio codec device support for Espressif SoC
+url: https://github.com/espressif/esp-audio-dev/tree/main/esp_codec_dev
+documentation: "https://github.com/espressif/esp-audio-dev/blob/main/esp_codec_dev/README.md"
+issues: https://github.com/espressif/esp-audio-dev/issues
+
+tags:
+  - adf
+  - audio_device
+  - codec_device
+  - gmf
+  - audio_codec
+
+
+dependencies:
+  idf:
+    version: '>=5.4.4,!=5.5.0,!=5.5.1,!=5.5.2'
+  espressif/usb_host_uac:
+    require: private
+    version: "^1.5.0"
+    rules:
+      - if: "target in [esp32s2, esp32s3, esp32s31, esp32p4, esp32h4] && $CONFIG{CODEC_UAC_SUPPORT} == True"

@@ -1,0 +1,113 @@
+include:
+  - '.gitlab/ci/common.yml'
+
+.pytest_components_esp32s3_ut_01:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO"
+
+.pytest_components_esp32s3_ut_02:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L1 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L1"
+
+.pytest_components_esp32s3_ut_03:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L2 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L2"
+
+.pytest_components_esp32s3_ut_04:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L6 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L6"
+
+.pytest_components_esp32s3_ut_05:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L7 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L7"
+
+.pytest_components_esp32s3_ut_06:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L8 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L8"
+
+.pytest_components_esp32s3_ut_07:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_L9 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_L9"
+
+.pytest_components_esp32s3_ut_08:
+  extends:
+    - .pytest_components_template
+  tags: [ esp32s3, UT_T1_AUDIO_E6 ]
+  variables:
+    TEST_ENV: "UT_T1_AUDIO_E6"
+
+pytest_components_esp32:
+  extends:
+    - .rules:build:enable-unit-test-static
+    - .pytest_components_template
+    - .matrix_template
+  needs:
+    - 'component_test_esp32'
+  tags: [ esp32, ESP_GMF_COMPONENT ]
+  variables:
+    TEST_ENV: "esp32"
+    IDF_TARGET: esp32
+
+pytest_components_esp32s3:
+  extends:
+    - .rules:build:enable-unit-test-static
+    - .pytest_components_template
+    - .matrix_template
+  needs:
+    - 'component_test_esp32s3'
+  tags: [ esp32s3, ESP_GMF_COMPONENT ]
+  variables:
+    TEST_ENV: "esp32s3"
+
+pytest_components_esp32p4:
+  extends:
+    - .rules:build:enable-unit-test-static
+    - .pytest_components_template
+  # Build still uses .matrix_template_v5_5 (v5.5.3 / v6.0.1 / release/v6.1).
+  # Board test is v6.0.1 only: release/v6.1 flash on current P4 USB-JTAG runners is unstable.
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['v6.0.1']
+  needs:
+    - job: component_test_esp32p4
+      parallel:
+        matrix:
+          - IDF_VERSION_TAG: 'v6.0.1'
+  tags: [ esp32p4, ESP_GMF_COMPONENT ]
+  variables:
+    TEST_ENV: "esp32p4"
+    IDF_TARGET: esp32p4
+
+pytest_components_esp32s31:
+  extends:
+    - .rules:build:enable-unit-test-static
+    - .pytest_components_template
+    - .matrix_template_v6_1
+  needs:
+    - component_test_esp32s31
+  tags: [ esp32s31, ESP_GMF_COMPONENT ]
+  variables:
+    TEST_ENV: "esp32s31"
+    IDF_TARGET: esp32s31
+    BOARD: ESP32_S31_KORVO_V1

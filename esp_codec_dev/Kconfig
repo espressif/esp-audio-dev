@@ -1,0 +1,131 @@
+menu "Audio Codec Device Configuration"
+    config CODEC_ES8311_SUPPORT
+        bool "Support ES8311 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES8311.
+
+    config CODEC_ES7210_SUPPORT
+        bool "Support ES7210 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES7210.
+
+    config CODEC_ES7243_SUPPORT
+        bool "Support ES7243 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES7243.
+
+    config CODEC_ES7243E_SUPPORT
+        bool "Support ES7243E Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES7243E.
+
+    config CODEC_ES8156_SUPPORT
+        bool "Support ES8156 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES8156.
+
+    config CODEC_AW88298_SUPPORT
+        bool "Support AW88298 Codec Chip"
+        default y
+        help
+            Enable this option to support codec AW88298.
+
+    config CODEC_ES8389_SUPPORT
+        bool "Support ES8389 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES8389.
+
+    config CODEC_ES8374_SUPPORT
+        bool "Support ES8374 Codec Chip"
+        default n
+        help
+            Enable this option to support codec ES8374.
+
+     config CODEC_ES8388_SUPPORT
+        bool "Support ES8388 Codec Chip"
+        default y
+        help
+            Enable this option to support codec ES8388.
+
+    config CODEC_TAS5805M_SUPPORT
+        bool "Support TAS5805M Codec Chip"
+        default y
+        help
+            Enable this option to support codec TAS5805M.
+
+    config CODEC_ZL38063_SUPPORT
+        bool "Support ZL38063 Codec Chip"
+        default n
+        help
+            Enable this option to support codec ZL38063.
+            ZL38063 firmware only support xtensa, don't enable for RISC-V IC.
+
+    config CODEC_CJC8910_SUPPORT
+        bool "Support CJC8910 Codec Chip"
+        default y
+        help
+            Enable this option to support codec CJC8910.
+
+    config CODEC_DUMMY_SUPPORT
+        bool "Support Dummy Codec Chip"
+        default y
+        help
+            Enable this option to support dummy codec, which is used without a codec chip
+
+    config CODEC_UAC_SUPPORT
+        bool "Support USB Audio Class device"
+        default n
+        depends on SOC_USB_OTG_SUPPORTED
+        help
+            Enable this option to support USB Audio Class devices as esp_codec_dev
+            codec and data interfaces. The application must install the USB Host
+            library and run the USB Host library event task before opening the
+            UAC codec device.
+
+    config CODEC_UAC_MAX_DEVICES
+        int "Maximum number of UAC devices"
+        default 2
+        range 1 8
+        depends on CODEC_UAC_SUPPORT
+        help
+            Maximum number of USB Audio Class devices the UAC manager can track
+            simultaneously. Each physical UAC device (addressed by its USB device
+            address) occupies one slot and may expose a microphone (RX) and/or a
+            speaker (TX).
+
+    config CODEC_UAC_DRV_STACK_SIZE
+        int "UAC Driver Task Stack Size"
+        default 4096
+        depends on CODEC_UAC_SUPPORT
+        help
+            Stack size for the USB UAC driver background task.
+
+    config CODEC_UAC_DRV_CORE_ID
+        int "UAC Driver Task Core ID"
+        default 0
+        range 0 1
+        depends on CODEC_UAC_SUPPORT && !FREERTOS_UNICORE
+        help
+            Core ID for the USB UAC driver background task.
+
+    config CODEC_UAC_DRV_PRIORITY
+        int "UAC Driver Task Priority"
+        default 20
+        depends on CODEC_UAC_SUPPORT
+        help
+            Priority for the USB UAC driver background task.
+
+    config CODEC_DATA_ADC_SUPPORT
+        bool "Support ADC continuous data interface"
+        default n
+        depends on SOC_ADC_SUPPORTED
+        help
+            Enable this option to support ADC continuous mode as an audio codec data interface.
+            This allows using the on-chip ADC for audio input instead of an external codec.
+endmenu

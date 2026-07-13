@@ -1,0 +1,19 @@
+EXAMPLES: []
+
+TEST_APPS:
+  - app_dir: esp_codec_dev/test_apps/codec_dev_test
+    board:
+      esp32s3:
+        - ESP32_S3_KORVO2_V3: v5.4-${LATEST_IDF_VERSION}
+      esp32p4:
+        - ESP32_P4_FUNCTION_EV: v5.5-${LATEST_IDF_VERSION}
+      esp32:
+        - ESP_LYRAT_MINI_V1_1: v5.4-${LATEST_IDF_VERSION}
+      esp32c3:
+        - ESP32_C3_LYRA_V2: v5.4-${LATEST_IDF_VERSION}
+      esp32s31:
+        - ESP32_S31_KORVO_V1: v6.1-${LATEST_IDF_VERSION}
+  - app_dir: esp_codec_dev/test_apps/codec_dev_uac_test
+    board:
+      esp32s3:
+        - ESP32_S3_KORVO2_V3: v5.4-${LATEST_IDF_VERSION}

@@ -1,0 +1,34 @@
+include:
+  - '.gitlab/ci/common.yml'
+  - '.gitlab/ci/rules.yml'
+  - '.gitlab/ci/pre-check.yml'
+  - '.gitlab/ci/build-ut.yml'
+  - '.gitlab/ci/target-ut.yml'
+
+stages:
+  - pre_check
+  - build
+  - target_test
+  - deploy
+
+before_script:
+  - source $PROJECT_ROOT/tools/ci/utils.sh
+  - before_script
+
+push_to_github:
+  stage: deploy
+  extends:
+    - .rules:build:push-to-github
+  when: on_success
+  image: $CI_DOCKER_REGISTRY/esp32-ci-env
+  variables:
+    GIT_STRATEGY: clone
+  before_script:
+    - echo "skip default before_script"
+  script:
+    - source $PROJECT_ROOT/tools/ci/utils.sh
+    - add_github_ssh_keys
+    - git fetch --unshallow
+    - git remote remove github &>/dev/null || true
+    - git remote add github git@github.com:espressif/esp-audio-dev.git
+    - tools/ci/push_to_github.sh

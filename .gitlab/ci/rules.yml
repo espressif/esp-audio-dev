@@ -1,0 +1,208 @@
+.patterns-build_components: &patterns-build_components
+  - "CMakeLists.txt"
+  - ".gitmodules"
+  - "esp_codec_dev/**/*"
+  - "README.md"
+
+##############
+# if anchors #
+##############
+.if-web: &if-web
+  if: '$CI_PIPELINE_SOURCE == "web"'
+
+.if-ref-main: &if-ref-main
+  if: '$CI_COMMIT_REF_NAME == "main"'
+
+.if-trigger: &if-trigger
+  if: '$CI_PIPELINE_SOURCE == "trigger"'
+
+.if-schedule: &if-schedule
+  if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+.if-pipeline: &if-pipeline
+  if: '$CI_PIPELINE_SOURCE == "pipeline"'
+
+.if-child-pipeline: &if-child-pipeline
+  if: '$CI_PIPELINE_SOURCE == "parent_pipeline"'
+
+.if-merge_request_event: &if-merge_request_event
+  if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+.if-open-merge-request: &if-open-merge-request
+  if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && ($CI_PIPELINE_SOURCE == "push")'
+
+.if-dev-push: &if-dev-push
+  if: '$CI_COMMIT_REF_NAME != "main" && $CI_COMMIT_BRANCH !~ /^release\/v/ && $CI_COMMIT_TAG !~ /^v\d+\.\d+(\.\d+)?($|-)/ && ($CI_PIPELINE_SOURCE == "push")'
+
+.if-protected: &if-protected
+  if: '($CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+
+.if-github-push: &if-github-push
+  if: '($CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/) &&
+        $CI_PIPELINE_SOURCE != "schedule"'
+
+.if-label-unit_test: &if-label-unit_test
+  if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.if-latest-idf-version: &if-latest-idf-version
+  if: '$LATEST_IDF_VERSION_ENV == "1"'
+
+.if-puppet_env: &if-puppet_env
+  if: '$PUPPET_ENV == "1"'
+
+# <CHIP>_ENV is a comma-separated test-type list (EXAMPLE_TEST / COMPONENT_TEST).
+# A non-empty value means this chip enables at least one test type.
+.if-esp32-env: &if-esp32-env
+  if: '$ESP32_ENV != ""'
+
+.if-esp32s2-env: &if-esp32s2-env
+  if: '$ESP32S2_ENV != ""'
+
+.if-esp32s3-env: &if-esp32s3-env
+  if: '$ESP32S3_ENV != ""'
+
+.if-esp32c3-env: &if-esp32c3-env
+  if: '$ESP32C3_ENV != ""'
+
+.if-esp32c6-env: &if-esp32c6-env
+  if: '$ESP32C6_ENV != ""'
+
+.if-esp32p4-env: &if-esp32p4-env
+  if: '$ESP32P4_ENV != ""'
+
+.if-esp32s31-env: &if-esp32s31-env
+  if: '$ESP32S31_ENV != ""'
+
+.rules:build:enable-unit-test:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32S2_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32S3_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32C3_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32C6_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32P4_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$ESP32S31_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.rules:build:enable-unit-test-static:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$IDF_VERSION_TAG == "v5.4.4" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+      variables:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v5.4:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v5.3:1"
+    - if: '$IDF_VERSION_TAG == "v5.5.3" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+      variables:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v5.5:3"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v5.5:2"
+    - if: '$IDF_VERSION_TAG == "v6.0.1" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+      variables:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.0:3"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.0:2"
+    - variables:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
+      if: '$IDF_VERSION_TAG == "release/v6.1" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+
+.rules:build:enable-unit-test-esp32:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.rules:build:enable-unit-test-esp32s3:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32S3_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.rules:build:enable-unit-test-esp32p4:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32P4_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.rules:build:enable-unit-test-esp32c3:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32C3_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+
+.rules:build:enable-unit-test-esp32s31:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - if: '$ESP32S31_ENV =~ /(^|,)COMPONENT_TEST(,|$)/'
+    - if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
+
+.rules:build:dynamic-pipeline:
+  rules:
+    - <<: *if-protected
+    - <<: *if-merge_request_event
+    - <<: *if-open-merge-request
+      when: never
+
+.rules:ref:main-schedule:
+  rules:
+    - <<: *if-ref-main
+    - <<: *if-schedule
+
+.rules:ref:check-label:
+  rules:
+    - <<: *if-protected
+      when: never
+    - <<: *if-merge_request_event
+    - <<: *if-open-merge-request
+      when: never
+
+.rules:build:trigger-pipeline:
+  rules:
+    - <<: *if-dev-push
+      when: never
+    - <<: *if-schedule
+      when: never
+    - changes: *patterns-build_components
+    - <<: *if-protected
+    - <<: *if-trigger
+    - <<: *if-pipeline
+    - <<: *if-child-pipeline
+
+.rules:puppet_env:
+  rules:
+    - <<: *if-open-merge-request
+      when: never
+    - <<: *if-puppet_env
+    - <<: *if-esp32-env
+    - <<: *if-esp32s2-env
+    - <<: *if-esp32s3-env
+    - <<: *if-esp32c3-env
+    - <<: *if-esp32c6-env
+    - <<: *if-esp32p4-env
+    - <<: *if-esp32s31-env
+
+.rules:build:push-to-github:
+  rules:
+    - <<: *if-github-push
+
+.matrix_template:
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['v5.4.4', 'v5.5.3', 'v6.0.1', 'release/v6.1']
+
+# Targets only available on IDF v5.5.3+ (e.g. esp32p4).
+.matrix_template_v5_5:
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['v5.5.3', 'v6.0.1', 'release/v6.1']
+
+# Targets only available on IDF v6.1+ (e.g. esp32s31).
+.matrix_template_v6_1:
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['release/v6.1']
