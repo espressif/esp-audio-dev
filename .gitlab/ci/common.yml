@@ -1,0 +1,119 @@
+variables:
+  # Build / make
+  MAKEFLAGS: "-j5 --no-keep-going"
+
+  # GitLab source checkout and submodules
+  GET_SOURCES_ATTEMPTS: "10"
+  ARTIFACT_DOWNLOAD_ATTEMPTS: "10"
+  GIT_STRATEGY: clone
+  GIT_SUBMODULE_STRATEGY: none
+  GIT_DEPTH: 1
+
+  IDF_SKIP_CHECK_SUBMODULES: 1
+
+  ADF_PATH: "$CI_PROJECT_DIR"
+  PROJECT_ROOT: "$CI_PROJECT_DIR"
+  CI_TOOLS_PATH: "$CI_PROJECT_DIR/ci-tools"
+  IDF_PATH: "/root/.espressif/esp-idf"
+  IDF_GITHUB_ASSETS: "dl.espressif.cn/github_assets"
+
+  # Common image aliases used by trigger.yml
+  CI_ESP_ENV_DEFAULT: "${CI_DOCKER_REGISTRY}/esp-env-v6.1:1"
+
+
+.build_test_template:
+  stage: build
+  image: ${BUILD_IMAGE}
+  tags:
+    - "ruby15-cent9 [32]"
+  parallel: 1
+  interruptible: true
+  dependencies: # set dependencies to null to avoid missing artifacts issue
+  variables:
+    BATCH_BUILD: "1"
+    V: "0"
+    CI_TOOLS_PATH: "$CI_PROJECT_DIR/ci-tools"
+
+
+.build_component_test_template: 
+  extends:
+    - .build_test_template
+  artifacts:
+    when: always
+    paths:
+      - "**/build*/size.json"
+      - "**/build*/build_log.txt"
+      - "**/build*/**/*.bin"
+      - "**/build*/*.elf"
+      - "**/build*/flasher_args.json"
+      - "**/build*/flash_project_args"
+      - "**/build*/config/sdkconfig.json"
+      - "**/build*/sdkconfig"
+      - "**/build*/bootloader/*.bin"
+      - "**/build*/partition_table/*.bin"
+      - "**/apps_path.json"
+      - "${PROJECT_ROOT}/esp_codec_dev/test_apps/**/*.py"
+    expire_in: 4 days
+  variables:
+    LOG_PATH: "$CI_PROJECT_DIR/log_ut_make"
+    OUTPUT_PATH: ${IDF_PATH}/tools/unit-test-app/output
+  script:
+    - common_script
+    - cd $PROJECT_ROOT
+    - git log -1
+    - build_test_apps test_app
+    - mkdir -p "${IDF_VERSION_TAG}" && if [ -f "${PROJECT_ROOT}/apps_path.json" ]; then mv "${PROJECT_ROOT}/apps_path.json" "${IDF_VERSION_TAG}/apps_path.json"; fi
+
+
+.target_test_template:
+  image: "${TEST_IMAGE}"
+  stage: target_test
+  timeout: 1 hour
+  retry: 2
+  variables:
+    GIT_DEPTH: 1
+    SUBMODULES_TO_FETCH: "none"
+    LOG_PATH: "$CI_PROJECT_DIR/TEST_LOGS"
+    ENV_FILE: "${IDF_PATH}/ci-test-runner-configs/$CI_RUNNER_DESCRIPTION/EnvConfig.yml"
+    TEST_DIR: ${PROJECT_ROOT}
+    BUILD_JOB_PREFIX: build_pytest_esp_codec_dev_
+    CI_TOOLS_PATH: "$CI_PROJECT_DIR/ci-tools"
+    IDF_TARGET: esp32s3
+    # pytest-embedded-idf flash path reads ESPBAUD (default 921600), not only --esptool-baud.
+    ESPBAUD: "115200"
+  before_script:
+    - source ${PROJECT_ROOT}/tools/ci/utils.sh
+    - before_script
+    - check_idf_version $IDF_VERSION_TAG
+    - _sanitize_idf_version_env_for_component_manager
+    - git_clone_ci_tools
+    - set_env_variable
+    - pip install pytest pytest-embedded-idf pytest-embedded-serial-esp pytest-rerunfailures pytest-timeout
+  cache:
+    # Usually do not need submodule-cache in target_test
+    - key: pip-cache
+      paths:
+        - .cache/pip
+      policy: pull
+
+
+.pytest_components_template:
+  extends:
+    - .target_test_template
+  timeout: 24 hour
+  artifacts:
+    when: always
+    paths:
+      - XUNIT_RESULT.xml
+      - pytest-embedded/
+    reports:
+      junit: XUNIT_RESULT.xml
+    expire_in: 1 week
+  script:
+    - cd $CI_PROJECT_DIR
+    - pytest_apps test_app
+
+.pytest_components_schedule_template:
+  extends:
+    - .rules:ref:main-schedule
+    - .pytest_components_template

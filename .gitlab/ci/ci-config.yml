@@ -1,0 +1,108 @@
+variables:
+  # Version configuration
+  IDF_VERSIONS:
+    - v5.4.4:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v5.4:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v5.3:1"
+    - v5.5.3:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v5.5:3"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v5.5:2"
+        AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v5.3:2"
+        AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.9/dist-packages"
+    - v6.0.1:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.0:3"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.0:2"
+        AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.0:1"
+        AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
+    - release/v6.1:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
+        AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.1:1"
+        AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
+    # master omitted: esp-env-master:1 is not published on ciregistry yet
+
+  # Latest stable version (required): ``${LATEST_IDF_VERSION}``
+  # Scanners and generated_triggers in tools/ci/apps.yaml all depend on this field
+  LATEST_IDF_VERSION: release/v6.1
+
+  ADF_PATH: "$CI_PROJECT_DIR"
+  PROJECT_ROOT: "$CI_PROJECT_DIR"
+  IDF_PATH: "/root/.espressif/esp-idf"
+  MAKEFLAGS: "-j5 --no-keep-going"
+  GET_SOURCES_ATTEMPTS: "10"
+  ARTIFACT_DOWNLOAD_ATTEMPTS: "10"
+  GIT_STRATEGY: "clone"
+  GIT_SUBMODULE_STRATEGY: "none"
+  IDF_SKIP_CHECK_SUBMODULES: "1"
+  GIT_DEPTH: "1"
+  MAX_APPS_PER_BUILD_JOB: "10"
+
+
+PRIORITY_LIST:
+  - commit_tag
+  - changes
+
+
+SUPPORT_BOARDS:
+  - ESP_LYRAT_MINI_V1_1:
+      chip: "esp32"
+      board_name: "esp32_lyrat_mini_1_1"
+      idf_version: ""
+  - ESP32_S3_KORVO2_V3:
+      chip: "esp32s3"
+      board_name: "esp32_s3_korvo_2_3"
+      idf_version: ""
+  - ESP32_C3_LYRA_V2:
+      chip: "esp32c3"
+      board_name: "esp32_c3_lyra"
+      idf_version: ""
+  - ESP32_P4_FUNCTION_EV:
+      chip: "esp32p4"
+      board_name: "esp32_p4_function_ev_board"
+      idf_version: ""
+  - ESP32_S31_KORVO_V1:
+      chip: "esp32s31"
+      board_name: "esp32_s31_korvo_1"
+      idf_version: ""
+
+
+# Trigger rule configuration
+# Decide which IDF versions to trigger by file changes or commit messages
+trigger_rules:
+  # Rules are evaluated by priority; the first matching rule is used
+
+  # Rule 1: Documentation changes - trigger latest stable only
+  - name: "Documentation changed"
+    changes:
+      - "^README\\.md$"
+      - "^esp_codec_dev/README\\.md$"
+      - "^esp_codec_dev/README_CN\\.md$"
+      - "^esp_codec_dev/docs/"
+    trigger_versions: latest
+
+  # Rule 2: Component changes - trigger all configured versions
+  - name: "esp_codec_dev changed"
+    changes:
+      - "^esp_codec_dev/"
+    trigger_versions: all
+
+  # Rule 3: CI or tooling changes - trigger all versions
+  - name: "CI or tools changed"
+    changes:
+      - "^tools/"
+      - "^\\.gitlab/"
+      - "^\\.github/"
+      - "^\\.gitlab-ci\\.yml$"
+    trigger_versions: all
+
+  # Rule 4: Commit message tag - [test-all]
+  - name: "Commit message: [test-all]"
+    commit_tag:
+      - "\\[test-all\\]"
+    trigger_versions: all
+
+  # Rule 5: Commit message tag - [test-latest]
+  - name: "Commit message: [test-latest]"
+    commit_tag:
+      - "\\[test-latest\\]"
+    trigger_versions: latest
