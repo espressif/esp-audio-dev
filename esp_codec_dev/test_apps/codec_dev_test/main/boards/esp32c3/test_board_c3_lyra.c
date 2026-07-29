@@ -7,9 +7,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
-#include "soc/soc_caps.h"
 #include "unity.h"
 #include "esp_log.h"
 

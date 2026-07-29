@@ -80,6 +80,19 @@ pytest_components_esp32s3:
   variables:
     TEST_ENV: "esp32s3"
 
+pytest_components_esp32c3:
+  extends:
+    - .rules:build:enable-unit-test-static
+    - .pytest_components_template
+    - .matrix_template
+  needs:
+    - 'component_test_esp32c3'
+  tags: [ esp32c3, ESP_GMF_COMPONENT ]
+  variables:
+    TEST_ENV: "esp32c3"
+    IDF_TARGET: esp32c3
+    BOARD: ESP32_C3_LYRA_V2
+
 pytest_components_esp32p4:
   extends:
     - .rules:build:enable-unit-test-static
