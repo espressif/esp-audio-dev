@@ -14,7 +14,7 @@ Target-specific sources are selected in [main/CMakeLists.txt](main/CMakeLists.tx
 
 | Target | Board test sources |
 | --- | --- |
-| ESP32-S3 | `main/boards/esp32s3/test_board.c`, `test_board_i2s_open_order.c`, `test_board_single_channel.c`; `main/boards/es8389/test_board_es8389.c` |
+| ESP32-S3 | `main/boards/esp32s3/test_board.c`, `test_board_i2s_open_order.c`, `test_board_single_channel.c`, `test_board_aw88298.c`; `main/boards/es8389/test_board_es8389.c` |
 | ESP32-S31 | `main/boards/es8389/test_board_es8389.c` |
 | ESP32 | `main/boards/esp32/test_board_i2s_hw_1.c` (ESP32-LyraT-Mini) |
 | ESP32-C3 | `main/boards/esp32c3/test_board_c3_lyra.c` (requires `CONFIG_CODEC_DATA_ADC_SUPPORT`) |

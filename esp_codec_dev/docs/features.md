@@ -235,7 +235,7 @@ esp_codec_dev_uac_uninstall();
 | `ES8374` | ADC + DAC + Line | Y | Y | 新模型 | N | `sys_cfg`、`adc_cfg`、`dac_cfg`、`pa_cfg`；v2.0 尚未完成硬件实测。 |
 | `ES8388` | ADC + DAC codec | Y | Y | 部分新模型 | Y | `sys_cfg`、`pa_cfg`；ALC、Line、order。 |
 | `ES8389` | ADC + DAC codec | Y | Y | 完整新模型 | Y | `sys_cfg`、`adc_cfg`、`dac_cfg`、`pa_cfg`；order、label、多实例引用计数。 |
-| `AW88298` | Smart amplifier | Y | N | 部分新模型 | N | `pa_cfg`、`reset_cfg`；作为 DAC path。 |
+| `AW88298` | Smart amplifier | Y | N | 部分新模型 | Y | `pa_cfg`、`reset_cfg`；作为 DAC path。 |
 | `TAS5805M` | Class-D amplifier | Y | N | 部分新模型 | N | `sys_cfg`、`pa_cfg`、`reset_cfg`。 |
 | `ZL38063` | DSP / voice processor | Y | N | 部分新模型 | N | `pa_cfg`、`reset_cfg`；含固件与 Twolf API。 |
 | `CJC8910` | ADC + DAC codec | Y | Y | 部分新模型 | N | 主要 `pa_cfg`；ADC 侧能力有限。 |
@@ -292,13 +292,29 @@ v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_
 
 | API | 功能 |
 | --- | --- |
-| `audio_codec_new()` | 按名称创建 codec interface（覆盖部分 Kconfig 启用的驱动；UAC 走 UAC 管理器）。配置须为 `audio_codec_cfg_t` 且 `cfg_size == sizeof(audio_codec_cfg_t)`。 |
+| `audio_codec_new()` | 按名称创建 codec interface（内置 Kconfig 驱动 + 通过 `AUDIO_CODEC_REGISTER()` 链接期注册的外部描述符；UAC 走 UAC 管理器）。`codec_cfg` 可为芯片专用 cfg，或在描述符提供 `build_chip_cfg` 时使用 `audio_codec_cfg_t`。 |
 | `audio_codec_new_i2c_ctrl()` | 创建 I2C 控制接口。 |
 | `audio_codec_new_spi_ctrl()` | 创建 SPI 控制接口。 |
 | `audio_codec_new_i2s_data()` | 创建 I2S 数据接口。 |
 | `audio_codec_new_adc_data()` | 创建内部 ADC 数据接口。 |
 | `esp_codec_dev_uac_install()` / `esp_codec_dev_uac_new_dev()` | 安装 UAC 管理器并派生句柄。 |
 | `audio_codec_new_gpio()` | 创建 GPIO 操作接口。 |
+
+外部 codec：实现 `audio_codec_if_t` 与芯片 `*_codec_new()` 后，可直接把 `codec_if` 交给 `esp_codec_dev_new()`；若需走 `audio_codec_new("name", …)`，在文件作用域使用 `AUDIO_CODEC_REGISTER(name, create, cfg_size, build_chip_cfg)` 注册描述符。名称必须是有效且唯一的 C 标识符；内置 codec 同名时以内置实现为准，运行时会打印一条 warning，提示关闭对应的 `CONFIG_CODEC_*_SUPPORT` 以启用注册驱动。描述符在链接期收集，不执行运行时分配，也不支持注销。`cfg_size` 必须非零且不得等于 `sizeof(audio_codec_cfg_t)`（均由编译期断言强制），否则 `audio_codec_new()` 无法区分两种配置形态。`create` 必须把需要的字段拷出 cfg；走 `audio_codec_cfg_t` 路径时临时 chip cfg 在 `create` 返回后立刻释放。
+
+注册描述符所在组件必须完整参与链接。可以在该组件的 `CMakeLists.txt` 中设置：
+
+```cmake
+idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)
+```
+
+若不希望完整链接整个组件，也可以只强制引入注册符号：
+
+```cmake
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-u audio_codec_desc_my_codec")
+```
+
+不在 `audio_codec_cfg_t` 内的芯片专属字段应放在芯片 `*_codec_cfg_t` 中，通过 `cfg_size == chip_cfg_size` 直通；`build_chip_cfg` 从 `audio_codec_cfg_t` 构建芯片 cfg（可为 NULL，此时只接受芯片专用 cfg）。
 
 部分 codec 仍主要通过 `es8311_codec_new()` 等专用构造函数创建；迁移与字段对照见 [api_migration_guide.md](api_migration_guide.md)。
 
@@ -310,7 +326,7 @@ v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_
 4. `get_caps` 主要由 ES8311 与 UAC 实现；其他 codec 返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
 5. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_order` / `get_channel_mask`；label API 另外依赖 codec 实现 `get_adc_label`。
 6. 硬件音频处理实际覆盖集中在 ES8311、ES7210、ES8388。
-7. `audio_codec_new()` 工厂未覆盖全部 codec。
+7. 内置静态表覆盖了全部 Kconfig 可选 codec；UAC 走独立管理器，自定义驱动可通过 `AUDIO_CODEC_REGISTER()` 链接期挂接，或继续调用专用 `*_codec_new()`。
 8. v2.0 硬件实测已覆盖 ES7210、ES7243、ES7243E、ES8311、ES8388、ES8389，以及片上 ADC、USB UAC、I2S PDM TX；其余 codec 与 PDM RX 有待实机验证（见第 10 节）。
 
 更详细的 API 与配置迁移说明见 [api_migration_guide.md](api_migration_guide.md)。

@@ -46,7 +46,7 @@
 | ES7243 | N | Y | - | Y |
 | ES7243E | N | Y | - | Y |
 | ES8156 | Y | N | - | N |
-| AW88298 | Y | N | - | N |
+| AW88298 | Y | N | - | Y |
 | TAS5805M | Y | N | - | N |
 | ZL38063 | Y | N | - | N |
 | ES8311 | Y | Y | ALC, DRC, EQ, mute | Y |

@@ -1,0 +1,15 @@
+# Static registration of external codec descriptors at link time
+
+[sections:audio_codec_desc]
+entries:
+    .audio_codec_desc
+
+[scheme:audio_codec_desc_default]
+entries:
+    audio_codec_desc -> flash_rodata
+
+[mapping:audio_codec_desc]
+archive: *
+entries:
+    * (audio_codec_desc_default);
+        audio_codec_desc -> flash_rodata KEEP() SURROUND(audio_codec_desc_array)

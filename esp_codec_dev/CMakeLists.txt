@@ -135,7 +135,8 @@ idf_component_register(SRCS "${COMPONENT_SRCS}"
                        INCLUDE_DIRS "${COMPONENT_ADD_INCLUDEDIRS}"
                        PRIV_INCLUDE_DIRS "${COMPONENT_PRIV_INCLUDEDIRS}"
                        PRIV_REQUIRES ${priv_requires}
-                       REQUIRES ${requires})
+                       REQUIRES ${requires}
+                       LDFRAGMENTS "linker.lf")
 
 idf_component_get_property(esp_codec_dev_version ${COMPONENT_NAME} COMPONENT_VERSION)
 if(esp_codec_dev_version)

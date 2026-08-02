@@ -529,10 +529,6 @@ static void test_case_es8389_record_while_playing_full_duplex_custom_pins(void)
             .is_master = false,
             .no_mclk = true,
         },
-        .adc_cfg = {
-            .digital_mic = false,
-            .label = "FL,FR,RE",
-        },
         .dac_cfg = {
             .ref_enable = true,
         },
@@ -565,6 +561,10 @@ static void test_case_es8389_record_while_playing_full_duplex_custom_pins(void)
     TEST_ESP_OK(ret);
     ret = esp_codec_dev_set_in_gain(record_dev, TEST_CODEC_BOARD_IN_GAIN);
     TEST_ESP_OK(ret);
+
+    char label[16] = {0};
+    ret = esp_codec_dev_get_data_layout_label(record_dev, label, sizeof(label));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, ret);
 
     esp_codec_dev_sample_info_t fs = {
         .sample_rate = 48000,

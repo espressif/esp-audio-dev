@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 
 #include "sdkconfig.h"
 #include "esp_bit_defs.h"
@@ -524,6 +525,64 @@ static void test_audio_codec_new_common_api(void)
     audio_codec_delete_data_if(data_if);
 }
 
+static void my_codec_build_chip_cfg(const audio_codec_cfg_t *cfg, void *chip_cfg)
+{
+    my_codec_cfg_t *out = (my_codec_cfg_t *)chip_cfg;
+    memset(out, 0, sizeof(*out));
+    out->ctrl_if = cfg->ctrl_if;
+    out->gpio_if = cfg->gpio_if;
+    out->hw_gain = cfg->pa_cfg.hw_gain;
+}
+
+AUDIO_CODEC_REGISTER(my_codec, my_codec_new, sizeof(my_codec_cfg_t), my_codec_build_chip_cfg);
+AUDIO_CODEC_REGISTER(my_codec_nobuild, my_codec_new, sizeof(my_codec_cfg_t), NULL);
+#ifdef CONFIG_CODEC_DUMMY_SUPPORT
+AUDIO_CODEC_REGISTER(dummy, my_codec_new, sizeof(my_codec_cfg_t), NULL);
+#endif  /* CONFIG_CODEC_DUMMY_SUPPORT */
+
+static void test_audio_codec_link_registry(void)
+{
+    const audio_codec_ctrl_if_t *ctrl_if = my_codec_ctrl_new();
+    TEST_ASSERT_NOT_NULL(ctrl_if);
+    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    TEST_ASSERT_NOT_NULL(gpio_if);
+
+    my_codec_cfg_t chip_cfg = {
+        .ctrl_if = ctrl_if,
+        .gpio_if = gpio_if,
+    };
+    const audio_codec_if_t *codec_if = audio_codec_new("my_codec", &chip_cfg, sizeof(chip_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+
+    audio_codec_cfg_t common_cfg = {
+        .ctrl_if = ctrl_if,
+        .gpio_if = gpio_if,
+    };
+    codec_if = audio_codec_new("my_codec", &common_cfg, sizeof(common_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+
+    TEST_ASSERT_NULL(audio_codec_new("my_codec_nobuild", &common_cfg, sizeof(common_cfg)));
+    codec_if = audio_codec_new("my_codec_nobuild", &chip_cfg, sizeof(chip_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+
+    TEST_ASSERT_NULL(audio_codec_new("unknown_codec", &chip_cfg, sizeof(chip_cfg)));
+
+#ifdef CONFIG_CODEC_DUMMY_SUPPORT
+    dummy_codec_cfg_t dummy_cfg = {
+        .gpio_if = gpio_if,
+    };
+    codec_if = audio_codec_new("dummy", &dummy_cfg, sizeof(dummy_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+#endif  /* CONFIG_CODEC_DUMMY_SUPPORT */
+
+    audio_codec_delete_ctrl_if(ctrl_if);
+    audio_codec_delete_gpio_if(gpio_if);
+}
+
 static void test_esp_codec_dev_hw_proc_api(void)
 {
     const audio_codec_ctrl_if_t *ctrl_if = my_codec_ctrl_new();
@@ -706,6 +765,11 @@ TEST_CASE("esp codec dev feature should not support", "[mock][api]")
 TEST_CASE("audio codec common new API test", "[mock][api]")
 {
     test_audio_codec_new_common_api();
+}
+
+TEST_CASE("audio codec link registry API test", "[mock][api]")
+{
+    test_audio_codec_link_registry();
 }
 
 TEST_CASE("esp codec dev hw proc API test", "[mock][api][proc]")
