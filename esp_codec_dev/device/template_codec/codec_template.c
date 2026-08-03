@@ -15,7 +15,7 @@
 #include "codec_reg_dump.h"
 #include "esp_codec_dev_vol.h"
 #include "esp_codec_dev_os.h"
-#include "hw_proc/audio_hw_proc_if.h"
+#include "esp_audio_hw_proc_if.h"
 
 static const char *TAG = "CHIP";
 
@@ -109,13 +109,13 @@ static const esp_codec_dev_vol_range_t vol_range = {
     },
 };
 
-/* Optional: wire base.hw_proc when *_new handlers are implemented (see es8311) */
-static const audio_codec_hw_proc_ops_t hw_proc = {
-    .alc_new = NULL,
-    .drc_new = NULL,
-    .eq_new = NULL,
-    .line_new = NULL,
-    .mute_new = NULL,
+/* Optional: wire base.hw_proc when ops tables are implemented (see es8311) */
+static const esp_audio_hw_proc_ops_t hw_proc = {
+    .alc = NULL,
+    .drc = NULL,
+    .eq = NULL,
+    .line = NULL,
+    .mute = NULL,
 };
 
 static const esp_codec_dev_device_map_info_t order_info[] = {

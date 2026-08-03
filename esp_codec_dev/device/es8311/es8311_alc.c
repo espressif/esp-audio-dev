@@ -5,14 +5,14 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
 #include <math.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
 
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es8311_reg.h"
-#include "es8311_proc_priv.h"
 
 static const char *TAG = "ES8311_ALC";
 
@@ -45,11 +45,8 @@ static int es8311_set_max_min_gain(const audio_hw_base_t *hw_base, float max_gai
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_set_noise_gate(const audio_hw_alc_t *h, float threshold)
+static int es8311_set_noise_gate(const audio_hw_base_t *hw_base, float threshold)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-
     int reg = 0;
     ES8311_RETURN_ON_ERROR(audio_hw_get_reg(hw_base, ES8311_ADC_REG1A, &reg), "Get noise gate");
     reg &= 0xF0;
@@ -66,17 +63,15 @@ static int es8311_set_noise_gate(const audio_hw_alc_t *h, float threshold)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_cfg)
+static int es8311_alc_init(const audio_hw_base_t *hw_base, const esp_audio_hw_alc_cfg_t *alc_cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
     ESP_RETURN_ON_FALSE(alc_cfg, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
 
     int reg = 0;
     ES8311_RETURN_ON_ERROR(es8311_set_max_min_gain(hw_base, alc_cfg->max_gain, alc_cfg->min_gain),
                            "Set ALC max min gain");
 
-    ES8311_RETURN_ON_ERROR(es8311_set_noise_gate(h, alc_cfg->noise_gate_threshold), "Set ALC noise gate");
+    ES8311_RETURN_ON_ERROR(es8311_set_noise_gate(hw_base, alc_cfg->noise_gate_threshold), "Set ALC noise gate");
     ES8311_RETURN_ON_ERROR(audio_hw_get_reg(hw_base, ES8311_ADC_REG1A, &reg), "Get ALC noise gate");
     reg = (0x03 << 4) | (reg & 0x0F);
     ES8311_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES8311_ADC_REG1A, reg), "Set ALC noise gate mode");
@@ -85,7 +80,7 @@ static int es8311_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_c
     int tmp = audio_hw_get_reg(hw_base, ES8311_ADC_REG18, &reg);
     ES8311_RETURN_ON_ERROR(tmp, "Get ALC control");
     reg &= 0xBF;
-    if (alc_cfg->noise_gate_mode != ALC_NOISE_GATE_DISABLE) {
+    if (alc_cfg->noise_gate_mode != ESP_AUDIO_HW_ALC_NOISE_GATE_DISABLE) {
         reg |= 0x40;
         ES8311_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES8311_ADC_REG18, reg), "Set ALC control");
         ESP_LOGD(TAG, "Reg(0x%x): 0x%x", ES8311_ADC_REG18, reg);
@@ -93,7 +88,7 @@ static int es8311_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_c
         tmp = audio_hw_get_reg(hw_base, ES8311_ADC_REG1B, &reg);
         ES8311_RETURN_ON_ERROR(tmp, "Get ALC fade mode");
         reg &= 0x1F;
-        if (alc_cfg->noise_gate_mode == ALC_NOISE_GATE_MUTE_ADC) {
+        if (alc_cfg->noise_gate_mode == ESP_AUDIO_HW_ALC_NOISE_GATE_MUTE_ADC) {
             reg = (0x07 << 4) | reg;
         }
         ES8311_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES8311_ADC_REG1B, reg), "Set ALC fade mode");
@@ -106,11 +101,8 @@ static int es8311_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_c
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
+static int es8311_set_alc_channel(const audio_hw_base_t *hw_base, int channel_mask)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-
     int reg = 0;
     ES8311_RETURN_ON_ERROR(audio_hw_get_reg(hw_base, ES8311_ADC_REG18, &reg), "Get ALC channel");
     reg &= 0x7F;
@@ -122,11 +114,8 @@ static int es8311_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain)
+static int es8311_set_alc_target_gain(const audio_hw_base_t *hw_base, float target_gain)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-
     int reg = 0;
     ES8311_RETURN_ON_ERROR(audio_hw_get_reg(hw_base, ES8311_ADC_REG19, &reg), "Get ALC target gain");
     reg &= 0x0F;
@@ -138,23 +127,9 @@ static int es8311_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es8311_alc_new(const audio_hw_base_t *h, audio_hw_alc_handle_t *alc)
-{
-    ESP_RETURN_ON_FALSE(alc, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    ESP_RETURN_ON_FALSE(h, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    if (*alc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    ESP_RETURN_ON_FALSE(audio_hw_is_open(h), ESP_CODEC_DEV_WRONG_STATE, TAG, "Codec is not opened");
-
-    audio_hw_alc_t *alc_handle = calloc(1, sizeof(audio_hw_alc_t));
-    ESP_RETURN_ON_FALSE(alc_handle, ESP_CODEC_DEV_NO_MEM, TAG, "No memory");
-
-    alc_handle->base = h;
-    alc_handle->set_gain = es8311_set_alc_target_gain;
-    alc_handle->set_channel = es8311_set_alc_channel;
-    alc_handle->init = es8311_alc_init;
-    alc_handle->set_noise_gate = es8311_set_noise_gate;
-    *alc = alc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_alc_t es8311_alc_ops = {
+    .init = es8311_alc_init,
+    .set_gain = es8311_set_alc_target_gain,
+    .set_channel = es8311_set_alc_channel,
+    .set_noise_gate = es8311_set_noise_gate,
+};

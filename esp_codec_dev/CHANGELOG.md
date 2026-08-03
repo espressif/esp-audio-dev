@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Change
+
+- Replaced the hardware audio processing handle APIs (`audio_hw_*_new()` / `audio_hw_*_delete()`) with `esp_audio_hw_*()` functions that operate directly on `esp_codec_dev_handle_t`.
+- Renamed hardware audio processing headers, types, and macros to the `esp_audio_hw_` prefix, and moved driver vtables to `interface/esp_audio_hw_proc_if.h`.
+
 ## v2.0.0-beta2
 
 ### Bug Fixed

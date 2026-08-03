@@ -19,6 +19,7 @@
 #include "codec_dev_order.h"
 #include "codec_dev_data_cvt.h"
 #include "codec_dev_mirror.h"
+#include "audio_codec_hw_proc.h"
 
 static const char *TAG = "ADEV_CODEC";
 
@@ -52,6 +53,12 @@ typedef struct {
     int  req_ch_num;
     int  bus_len;
 } layout_frame_info_t;
+
+const audio_codec_if_t *esp_audio_hw_proc_get_codec_if(esp_codec_dev_handle_t handle)
+{
+    codec_dev_t *dev = (codec_dev_t *)handle;
+    return dev ? dev->codec_if : NULL;
+}
 
 static inline const char *esp_codec_dev_i2s_mode_to_string(esp_codec_dev_i2s_mode_t mode)
 {

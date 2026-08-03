@@ -5,12 +5,11 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
 #include "esp_log.h"
 #include "esp_check.h"
 
-#include "es8311_proc_priv.h"
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es8311_reg.h"
 
 static const char *TAG = "ES8311_EQ";
@@ -48,11 +47,8 @@ static int es8311_update_reg_bit(const audio_hw_base_t *hw_base, uint8_t reg_add
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_eq_enable(const audio_hw_eq_t *h, bool enable)
+static int es8311_eq_enable(const audio_hw_base_t *hw_base, bool enable)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-
     // TODO: Fix noise when enable is true
     enable = false;
     ES8311_RETURN_ON_ERROR(es8311_update_reg_bit(hw_base, ES8311_DAC_REG37, 0x08, enable ? 0x00 : 0x08),
@@ -72,10 +68,8 @@ static int es8311_set_eq_para(const audio_hw_base_t *hw_base, int base_reg, int3
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_set_cfg(const audio_hw_eq_t *h, const audio_eq_cfg_t *eq_cfg)
+static int es8311_set_cfg(const audio_hw_base_t *hw_base, const esp_audio_hw_eq_cfg_t *eq_cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
     ESP_RETURN_ON_FALSE(eq_cfg, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
     ESP_RETURN_ON_FALSE(eq_cfg->para, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid EQ parameters");
     ESP_RETURN_ON_FALSE(eq_cfg->filter_num >= 5, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid filter number");
@@ -98,41 +92,26 @@ static int es8311_set_cfg(const audio_hw_eq_t *h, const audio_eq_cfg_t *eq_cfg)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_dump_eq_info(const audio_hw_eq_t *h)
+static int es8311_dump_eq_info(const audio_hw_base_t *hw_base)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
+    (void)hw_base;
     int res = ESP_CODEC_DEV_OK;
     ESP_LOGI(TAG, "Support 5-band(adc) and 3-band(dac) eq, and 30bit coefficient");
     return res;
 }
 
-static int es8311_set_band_para(const audio_hw_eq_t *h, const eq_para_t *eq_para, int index)
+static int es8311_set_band_para(const audio_hw_base_t *hw_base, const esp_audio_hw_eq_para_t *eq_para, int index)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base && eq_para, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
+    ESP_RETURN_ON_FALSE(eq_para, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
+    (void)index;
 
     ES8311_RETURN_ON_ERROR(es8311_set_eq_para(hw_base, ES8311_ADC_EQ_B0_BASE, eq_para->gain), "Set EQ band");
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es8311_eq_new(const audio_hw_base_t *h, audio_hw_eq_handle_t *eq)
-{
-    ESP_RETURN_ON_FALSE(eq, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    ESP_RETURN_ON_FALSE(h, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    if (*eq != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    ESP_RETURN_ON_FALSE(audio_hw_is_open(h), ESP_CODEC_DEV_WRONG_STATE, TAG, "Codec is not opened");
-
-    audio_hw_eq_t *eq_handle = calloc(1, sizeof(audio_hw_eq_t));
-    ESP_RETURN_ON_FALSE(eq_handle, ESP_CODEC_DEV_NO_MEM, TAG, "No memory");
-
-    eq_handle->base = h;
-    eq_handle->enable = es8311_eq_enable;
-    eq_handle->dump_info = es8311_dump_eq_info;
-    eq_handle->set_cfg = es8311_set_cfg;
-    eq_handle->set_band_para = es8311_set_band_para;
-    *eq = eq_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_eq_t es8311_eq_ops = {
+    .enable = es8311_eq_enable,
+    .dump_info = es8311_dump_eq_info,
+    .set_cfg = es8311_set_cfg,
+    .set_band_para = es8311_set_band_para,
+};
