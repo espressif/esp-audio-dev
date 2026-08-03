@@ -14,11 +14,11 @@
 #include "my_codec.h"
 #include "esp_codec_dev_vol.h"
 #include "esp_codec_dev_defaults.h"
-#include "audio_hw_alc.h"
-#include "audio_hw_drc.h"
-#include "audio_hw_eq.h"
-#include "audio_hw_line.h"
-#include "audio_hw_mute.h"
+#include "esp_audio_hw_alc.h"
+#include "esp_audio_hw_drc.h"
+#include "esp_audio_hw_eq.h"
+#include "esp_audio_hw_line.h"
+#include "esp_audio_hw_mute.h"
 
 // Customized volume curve taken from android framework
 static esp_codec_dev_vol_map_t volume_maps[] = {
@@ -478,49 +478,58 @@ static void test_audio_codec_new_common_api(void)
     TEST_ASSERT_NULL(audio_codec_new("dummy", &chip_cfg, sizeof(chip_cfg) - 1));
     TEST_ASSERT_NULL(audio_codec_new("dummy", &common_cfg, sizeof(common_cfg) - 1));
 
-    audio_hw_alc_handle_t alc = NULL;
-    audio_hw_drc_handle_t drc = NULL;
-    audio_hw_eq_handle_t eq = NULL;
-    audio_hw_line_handle_t line = NULL;
-    audio_hw_mute_handle_t mute = NULL;
+    /* Dummy codec has no hw_proc; hw_proc APIs must return NOT_SUPPORT */
+    const audio_codec_data_if_t *data_if = my_codec_data_new();
+    TEST_ASSERT_NOT_NULL(data_if);
+    esp_codec_dev_cfg_t dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .codec_if = codec_if,
+        .data_if = data_if,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_alc_new(NULL, &alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_drc_new(NULL, &drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_eq_new(NULL, &eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_line_new(NULL, &line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_mute_new(NULL, &mute));
+    esp_audio_hw_alc_cfg_t alc_cfg = ESP_AUDIO_HW_ALC_CFG_DEFAULT();
+    esp_audio_hw_drc_cfg_t drc_cfg = ESP_AUDIO_HW_DRC_CFG_DEFAULT();
+    esp_audio_hw_eq_para_t eq_para = {.gain = 0, .frequency = 1000};
+    esp_audio_hw_eq_cfg_t eq_cfg = {
+        .para = &eq_para,
+        .filter_num = 1,
+    };
+    esp_audio_hw_auto_mute_cfg_t amute_cfg = ESP_AUDIO_HW_AUTO_MUTE_CFG_DEFAULT();
+    esp_audio_hw_soft_mute_cfg_t smute_cfg = ESP_AUDIO_HW_SOFT_MUTE_CFG_DEFAULT();
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_alc_new(codec_if, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_drc_new(codec_if, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_eq_new(codec_if, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_line_new(codec_if, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_mute_new(codec_if, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_alc_init(dev, &alc_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_alc_set_gain(dev, 0.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_drc_init(dev, &drc_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_eq_set_cfg(dev, &eq_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_line_enable_in(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_auto_mute_set_cfg(dev, &amute_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_soft_mute_set_cfg(dev, &smute_cfg));
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, audio_hw_alc_new(codec_if, &alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, audio_hw_drc_new(codec_if, &drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, audio_hw_eq_new(codec_if, &eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, audio_hw_line_new(codec_if, &line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, audio_hw_mute_new(codec_if, &mute));
+    /* Pure data path (no codec_if) also returns NOT_SUPPORT */
+    esp_codec_dev_delete(dev);
+    dev_cfg.codec_if = NULL;
+    dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_alc_init(dev, &alc_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_drc_enable(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_eq_enable(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_line_enable_out(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_auto_mute_enable(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_soft_mute_enable(dev, true));
 
-    TEST_ASSERT_NULL(alc);
-    TEST_ASSERT_NULL(drc);
-    TEST_ASSERT_NULL(eq);
-    TEST_ASSERT_NULL(line);
-    TEST_ASSERT_NULL(mute);
-
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_alc_delete(alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_drc_delete(drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_eq_delete(eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_line_delete(line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_mute_delete(mute));
-
+    esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);
+    audio_codec_delete_data_if(data_if);
 }
 
 static void test_esp_codec_dev_hw_proc_api(void)
 {
     const audio_codec_ctrl_if_t *ctrl_if = my_codec_ctrl_new();
     TEST_ASSERT_NOT_NULL(ctrl_if);
+    const audio_codec_data_if_t *data_if = my_codec_data_new();
+    TEST_ASSERT_NOT_NULL(data_if);
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
     TEST_ASSERT_NOT_NULL(gpio_if);
     my_codec_cfg_t codec_cfg = {
@@ -532,96 +541,83 @@ static void test_esp_codec_dev_hw_proc_api(void)
     const my_codec_proc_state_t *proc = my_codec_get_proc_state(codec_if);
     TEST_ASSERT_NOT_NULL(proc);
 
-    audio_hw_alc_handle_t alc = NULL;
-    audio_hw_drc_handle_t drc = NULL;
-    audio_hw_eq_handle_t eq = NULL;
-    audio_hw_line_handle_t line = NULL;
-    audio_hw_mute_handle_t mute = NULL;
+    esp_codec_dev_cfg_t dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .codec_if = codec_if,
+        .data_if = data_if,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_new(codec_if, &alc));
-    TEST_ASSERT_NOT_NULL(alc);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_new(codec_if, &drc));
-    TEST_ASSERT_NOT_NULL(drc);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_new(codec_if, &eq));
-    TEST_ASSERT_NOT_NULL(eq);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_new(codec_if, &line));
-    TEST_ASSERT_NOT_NULL(line);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_mute_new(codec_if, &mute));
-    TEST_ASSERT_NOT_NULL(mute);
-
-    audio_alc_cfg_t alc_cfg = DEFAULT_ALC_CONFIG();
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_init(alc, &alc_cfg));
+    esp_audio_hw_alc_cfg_t alc_cfg = ESP_AUDIO_HW_ALC_CFG_DEFAULT();
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_alc_init(dev, &alc_cfg));
     TEST_ASSERT_EQUAL(alc_cfg.min_gain, proc->alc_min_gain);
     TEST_ASSERT_EQUAL(alc_cfg.max_gain, proc->alc_max_gain);
     TEST_ASSERT_EQUAL(alc_cfg.target_gain, proc->alc_target_gain);
     TEST_ASSERT_EQUAL(alc_cfg.noise_gate_threshold, proc->alc_noise_gate);
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_set_channel_mask(alc, BIT(1)));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_alc_set_channel_mask(dev, BIT(1)));
     TEST_ASSERT_EQUAL(BIT(1), proc->alc_channel_mask);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_set_gain(alc, -12.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_alc_set_gain(dev, -12.0f));
     TEST_ASSERT_EQUAL(-12.0f, proc->alc_target_gain);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_set_noise_gate(alc, -45.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_alc_set_noise_gate(dev, -45.0f));
     TEST_ASSERT_EQUAL(-45.0f, proc->alc_noise_gate);
 
-    audio_drc_cfg_t drc_cfg = DEFAULT_DRC_CONFIG();
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_init(drc, &drc_cfg));
+    esp_audio_hw_drc_cfg_t drc_cfg = ESP_AUDIO_HW_DRC_CFG_DEFAULT();
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_drc_init(dev, &drc_cfg));
     TEST_ASSERT_EQUAL(drc_cfg.min_gain, proc->drc_min_gain);
     TEST_ASSERT_EQUAL(drc_cfg.max_gain, proc->drc_max_gain);
     TEST_ASSERT_EQUAL(drc_cfg.offset_gain, proc->drc_offset_gain);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_set_offset_gain(drc, -3.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_drc_set_offset_gain(dev, -3.0f));
     TEST_ASSERT_EQUAL(-3.0f, proc->drc_offset_gain);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_enable(drc, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_drc_enable(dev, true));
     TEST_ASSERT_EQUAL(true, proc->drc_enabled);
 
-    eq_para_t eq_para[] = {
+    esp_audio_hw_eq_para_t eq_para[] = {
         {.gain = 3, .frequency = 1000},
         {.gain = -2, .frequency = 4000},
     };
-    audio_eq_cfg_t eq_cfg = {
+    esp_audio_hw_eq_cfg_t eq_cfg = {
         .para = eq_para,
         .filter_num = 2,
     };
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_set_cfg(eq, &eq_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_eq_set_cfg(dev, &eq_cfg));
     TEST_ASSERT_EQUAL(2, proc->eq_filter_num);
     TEST_ASSERT_EQUAL(eq_para[0].gain, proc->eq_band[0].gain);
     TEST_ASSERT_EQUAL(eq_para[0].frequency, proc->eq_band[0].frequency);
     TEST_ASSERT_EQUAL(eq_para[1].gain, proc->eq_band[1].gain);
     TEST_ASSERT_EQUAL(eq_para[1].frequency, proc->eq_band[1].frequency);
 
-    eq_para_t band = {.gain = 6, .frequency = 8000};
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_set_band_para(eq, &band, 2));
+    esp_audio_hw_eq_para_t band = {.gain = 6, .frequency = 8000};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_eq_set_band_para(dev, &band, 2));
     TEST_ASSERT_EQUAL(3, proc->eq_filter_num);
     TEST_ASSERT_EQUAL(band.gain, proc->eq_band[2].gain);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_enable(eq, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_eq_enable(dev, true));
     TEST_ASSERT_EQUAL(true, proc->eq_enabled);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_dump_info(eq));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_eq_dump_info(dev));
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_enable_in(line, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_line_enable_in(dev, true));
     TEST_ASSERT_EQUAL(true, proc->line_in_enabled);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_enable_out(line, false));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_line_enable_out(dev, false));
     TEST_ASSERT_EQUAL(false, proc->line_out_enabled);
 
-    auto_mute_cfg_t amute_cfg = DEFAULT_AUTO_MUTE_CONFIG();
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_auto_mute_set_cfg(mute, &amute_cfg));
+    esp_audio_hw_auto_mute_cfg_t amute_cfg = ESP_AUDIO_HW_AUTO_MUTE_CFG_DEFAULT();
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_auto_mute_set_cfg(dev, &amute_cfg));
     TEST_ASSERT_EQUAL(amute_cfg.noise_gate, proc->auto_mute_noise_gate);
     TEST_ASSERT_EQUAL_FLOAT(amute_cfg.mute_vol, proc->auto_mute_vol);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_auto_mute_enable(mute, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_auto_mute_enable(dev, true));
     TEST_ASSERT_EQUAL(true, proc->auto_mute_enabled);
 
-    soft_mute_cfg_t smute_cfg = DEFAULT_SOFT_MUTE_CONFIG();
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_soft_mute_set_cfg(mute, &smute_cfg));
+    esp_audio_hw_soft_mute_cfg_t smute_cfg = ESP_AUDIO_HW_SOFT_MUTE_CFG_DEFAULT();
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_soft_mute_set_cfg(dev, &smute_cfg));
     TEST_ASSERT_EQUAL(smute_cfg.ramp_rate, proc->soft_mute_ramp_rate);
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_soft_mute_enable(mute, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_soft_mute_enable(dev, true));
     TEST_ASSERT_EQUAL(true, proc->soft_mute_enabled);
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_delete(alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_delete(drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_delete(eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_delete(line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_mute_delete(mute));
-
+    esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);
     audio_codec_delete_ctrl_if(ctrl_if);
+    audio_codec_delete_data_if(data_if);
     audio_codec_delete_gpio_if(gpio_if);
 }
 
@@ -629,6 +625,8 @@ static void test_esp_codec_dev_hw_proc_wrong_arg(void)
 {
     const audio_codec_ctrl_if_t *ctrl_if = my_codec_ctrl_new();
     TEST_ASSERT_NOT_NULL(ctrl_if);
+    const audio_codec_data_if_t *data_if = my_codec_data_new();
+    TEST_ASSERT_NOT_NULL(data_if);
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
     TEST_ASSERT_NOT_NULL(gpio_if);
     my_codec_cfg_t codec_cfg = {
@@ -638,51 +636,48 @@ static void test_esp_codec_dev_hw_proc_wrong_arg(void)
     const audio_codec_if_t *codec_if = my_codec_new(&codec_cfg);
     TEST_ASSERT_NOT_NULL(codec_if);
 
-    audio_hw_alc_handle_t alc = NULL;
-    audio_hw_drc_handle_t drc = NULL;
-    audio_hw_eq_handle_t eq = NULL;
-    audio_hw_line_handle_t line = NULL;
-    audio_hw_mute_handle_t mute = NULL;
+    esp_codec_dev_cfg_t dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .codec_if = codec_if,
+        .data_if = data_if,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
 
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_new(codec_if, &alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_new(codec_if, &drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_new(codec_if, &eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_new(codec_if, &line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_mute_new(codec_if, &mute));
-
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_alc_init(NULL, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_alc_set_gain(NULL, 0.0f));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_drc_init(NULL, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_eq_set_cfg(NULL, NULL));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_line_enable_in(NULL, true));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, audio_hw_auto_mute_enable(NULL, true));
-
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_alc_delete(alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_drc_delete(drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_eq_delete(eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_line_delete(line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_hw_mute_delete(mute));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_alc_init(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_alc_init(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_alc_set_gain(NULL, 0.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_drc_init(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_drc_init(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_eq_set_cfg(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_eq_set_cfg(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_eq_set_band_para(NULL, NULL, 0));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_line_enable_in(NULL, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_auto_mute_enable(NULL, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_auto_mute_set_cfg(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_soft_mute_set_cfg(dev, NULL));
 
     codec_if->hw_base.close(&codec_if->hw_base);
 
-    alc = NULL;
-    drc = NULL;
-    eq = NULL;
-    line = NULL;
-    mute = NULL;
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, audio_hw_alc_new(codec_if, &alc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, audio_hw_drc_new(codec_if, &drc));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, audio_hw_eq_new(codec_if, &eq));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, audio_hw_line_new(codec_if, &line));
-    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, audio_hw_mute_new(codec_if, &mute));
-    TEST_ASSERT_NULL(alc);
-    TEST_ASSERT_NULL(drc);
-    TEST_ASSERT_NULL(eq);
-    TEST_ASSERT_NULL(line);
-    TEST_ASSERT_NULL(mute);
+    esp_audio_hw_alc_cfg_t alc_cfg = ESP_AUDIO_HW_ALC_CFG_DEFAULT();
+    esp_audio_hw_drc_cfg_t drc_cfg = ESP_AUDIO_HW_DRC_CFG_DEFAULT();
+    esp_audio_hw_eq_para_t eq_para = {.gain = 0, .frequency = 1000};
+    esp_audio_hw_eq_cfg_t eq_cfg = {
+        .para = &eq_para,
+        .filter_num = 1,
+    };
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_alc_init(dev, &alc_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_alc_set_gain(dev, 0.0f));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_drc_init(dev, &drc_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_eq_set_cfg(dev, &eq_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_line_enable_in(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_auto_mute_enable(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_soft_mute_enable(dev, true));
 
+    esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);
     audio_codec_delete_ctrl_if(ctrl_if);
+    audio_codec_delete_data_if(data_if);
     audio_codec_delete_gpio_if(gpio_if);
 }
 

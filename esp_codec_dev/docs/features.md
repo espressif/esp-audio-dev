@@ -115,15 +115,25 @@ layout 由两层 map 信息合成：
 
 ## 7. 硬件音频处理框架
 
-v2.0 将 ALC、DRC、EQ、Line、Mute 等芯片侧音频处理模块抽象为统一句柄：应用先对目标 `codec_if` 调用 `audio_hw_*_new()` 创建处理句柄，再调用各模块的配置与 enable API。公共头文件位于 `include/hw_proc/`。
+v2.0 将 ALC、DRC、EQ、Line、Mute 等芯片侧音频处理模块纳入统一框架。应用在 `esp_codec_dev_open()` 之后，直接对 `esp_codec_dev_handle_t` 调用 `esp_audio_hw_*()`；无需单独创建处理句柄。应用侧头文件位于 `include/hw_proc/`（如 `esp_audio_hw_alc.h`）；驱动侧实现表位于 `interface/esp_audio_hw_proc_if.h`。芯片通过 `audio_codec_if_t.hw_proc`（类型 `esp_audio_hw_proc_ops_t`）提供实现表，未实现的类型返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
 
-| Effect | 创建 API | 主要操作 |
-| --- | --- | --- |
-| ALC | `audio_hw_alc_new()` | `audio_hw_alc_set_gain()`、`audio_hw_alc_set_channel_mask()`、`audio_hw_alc_init()`、`audio_hw_alc_set_noise_gate()` |
-| DRC | `audio_hw_drc_new()` | `audio_hw_drc_set_offset_gain()`、`audio_hw_drc_init()`、`audio_hw_drc_enable()` |
-| EQ | `audio_hw_eq_new()` | `audio_hw_eq_set_cfg()`、`audio_hw_eq_set_band_para()`、`audio_hw_eq_enable()`、`audio_hw_eq_dump_info()` |
-| Line | `audio_hw_line_new()` | `audio_hw_line_enable_in()`、`audio_hw_line_enable_out()` |
-| Mute | `audio_hw_mute_new()` | `audio_hw_auto_mute_set_cfg()`、`audio_hw_auto_mute_enable()`、`audio_hw_soft_mute_set_cfg()`、`audio_hw_soft_mute_enable()` |
+| 处理类型 | 主要 API |
+| --- | --- |
+| ALC | `esp_audio_hw_alc_init()`、`esp_audio_hw_alc_set_gain()`、`esp_audio_hw_alc_set_channel_mask()`、`esp_audio_hw_alc_set_noise_gate()` |
+| DRC | `esp_audio_hw_drc_init()`、`esp_audio_hw_drc_set_offset_gain()`、`esp_audio_hw_drc_enable()` |
+| EQ | `esp_audio_hw_eq_set_cfg()`、`esp_audio_hw_eq_set_band_para()`、`esp_audio_hw_eq_enable()`、`esp_audio_hw_eq_dump_info()` |
+| Line | `esp_audio_hw_line_enable_in()`、`esp_audio_hw_line_enable_out()` |
+| Mute | `esp_audio_hw_auto_mute_set_cfg()`、`esp_audio_hw_auto_mute_enable()`、`esp_audio_hw_soft_mute_set_cfg()`、`esp_audio_hw_soft_mute_enable()` |
+
+示例（ALC）：
+
+```c
+#include "esp_audio_hw_alc.h"
+
+esp_audio_hw_alc_cfg_t alc_cfg = ESP_AUDIO_HW_ALC_CFG_DEFAULT();
+esp_audio_hw_alc_init(dev, &alc_cfg);
+esp_audio_hw_alc_set_gain(dev, -12.0f);
+```
 
 | Codec | 已实现硬件音频处理 |
 | --- | --- |
@@ -131,8 +141,6 @@ v2.0 将 ALC、DRC、EQ、Line、Mute 等芯片侧音频处理模块抽象为统
 | `ES7210` | ALC、Mute |
 | `ES8388` | ALC、Line |
 | 其他 codec | 当前未提供硬件音频处理实现 |
-
-`audio_hw_*_delete()` 仅释放句柄；芯片内部状态恢复由驱动负责。删除 `audio_codec_if_t` 前须先删除其下所有处理句柄。
 
 ## 8. 数据通路实现
 
@@ -224,7 +232,7 @@ esp_codec_dev_uac_uninstall();
 | `ES7243` | ADC | N | Y | 部分新模型 | Y | 主要 `adc_cfg`；ADC label。 |
 | `ES7243E` | ADC | N | Y | 部分新模型 | Y | 主要 `adc_cfg`；order、label。 |
 | `ES8156` | DAC | Y | N | 部分新模型 | N | 主要 `pa_cfg`；DAC 与 PA 控制。 |
-| `ES8374` | ADC + DAC + Line | Y | Y | 旧模型 | N | 旧式 flat `codec_cfg` 与接口填表。 |
+| `ES8374` | ADC + DAC + Line | Y | Y | 新模型 | N | `sys_cfg`、`adc_cfg`、`dac_cfg`、`pa_cfg`；v2.0 尚未完成硬件实测。 |
 | `ES8388` | ADC + DAC codec | Y | Y | 部分新模型 | Y | `sys_cfg`、`pa_cfg`；ALC、Line、order。 |
 | `ES8389` | ADC + DAC codec | Y | Y | 完整新模型 | Y | `sys_cfg`、`adc_cfg`、`dac_cfg`、`pa_cfg`；order、label、多实例引用计数。 |
 | `AW88298` | Smart amplifier | Y | N | 部分新模型 | N | `pa_cfg`、`reset_cfg`；作为 DAC path。 |
@@ -271,7 +279,7 @@ esp_codec_dev_uac_uninstall();
 
 ## 12. 配置模型与默认接口工厂
 
-v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_new()` 及芯片专用 `*_codec_new()` 共用同一套字段语义。`audio_hw_*_cfg_t` 定义在 `interface/audio_codec_hw_cfg.h`；工厂袋 `audio_codec_cfg_t` 与 `audio_codec_new()` 定义在 `esp_codec_dev_defaults.h`；`audio_codec_if.h` 仅保留运行时接口与 `audio_codec_delete_codec_if()`。
+v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_new()` 及芯片专用 `*_codec_new()` 共用同一套字段语义。`audio_hw_*_cfg_t` 定义在 `interface/audio_codec_hw_cfg.h`；工厂配置 `audio_codec_cfg_t` 与 `audio_codec_new()` 定义在 `esp_codec_dev_defaults.h`；`audio_codec_if.h` 仅保留运行时接口与 `audio_codec_delete_codec_if()`。
 
 | 结构 | 作用 |
 | --- | --- |
@@ -296,15 +304,14 @@ v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_
 
 ## 13. 当前支持范围与限制
 
-1. 各 codec 的配置迁移进度不同，部分驱动仍保留旧式 `codec_cfg`。
-2. `ES8374` 仍使用旧式 flat `audio_codec_if_t` 填表。
-3. `ES8311` 的 `dac_cfg` 已结构化，部分 DAC reference 模式仅区分启用与禁用。
-4. `ES7210` 的 `adc_cfg.digital_mic` 字段当前驱动未消费。
-5. `get_caps` 主要由 ES8311 与 UAC 实现；其他 codec 返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
-6. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_order` / `get_channel_mask`；label API 另外依赖 codec 实现 `get_adc_label`。
-7. 硬件音频处理实际覆盖集中在 ES8311、ES7210、ES8388。
-8. `audio_codec_new()` 工厂未覆盖全部 codec。
-9. v2.0 硬件实测已覆盖 ES7210、ES7243、ES7243E、ES8311、ES8388、ES8389，以及片上 ADC、USB UAC、I2S PDM TX；其余 codec 与 PDM RX 有待实机验证（见第 10 节）。
+1. 各 codec 的 `codec_cfg` 均已迁到公共子配置模型；差异主要体现在按硬件能力选用的子配置子集，以及部分芯片的测试覆盖程度。
+2. `ES8311` 的 `dac_cfg` 已结构化，部分 DAC reference 模式仅区分启用与禁用。
+3. `ES7210` 的 `adc_cfg.digital_mic` 字段当前驱动未消费。
+4. `get_caps` 主要由 ES8311 与 UAC 实现；其他 codec 返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
+5. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_order` / `get_channel_mask`；label API 另外依赖 codec 实现 `get_adc_label`。
+6. 硬件音频处理实际覆盖集中在 ES8311、ES7210、ES8388。
+7. `audio_codec_new()` 工厂未覆盖全部 codec。
+8. v2.0 硬件实测已覆盖 ES7210、ES7243、ES7243E、ES8311、ES8388、ES8389，以及片上 ADC、USB UAC、I2S PDM TX；其余 codec 与 PDM RX 有待实机验证（见第 10 节）。
 
 更详细的 API 与配置迁移说明见 [api_migration_guide.md](api_migration_guide.md)。
 

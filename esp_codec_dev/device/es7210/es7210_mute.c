@@ -5,11 +5,10 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
 #include "esp_log.h"
 
-#include "es7210_proc_priv.h"
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es7210_reg.h"
 
 static const char *TAG = "ES7210_MUTE";
@@ -102,13 +101,8 @@ static int es7210_auto_mute_select(const audio_hw_base_t *hw_base, int channel_m
     return ESP_CODEC_DEV_OK;
 }
 
-static int es7210_auto_mute_enable(const audio_hw_mute_t *h, bool enable)
+static int es7210_auto_mute_enable(const audio_hw_base_t *hw_base, bool enable)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set auto mute enable failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int channel_mask = 0x0F;
     ES7210_RETURN_ON_ERROR(es7210_auto_mute_select(hw_base, channel_mask, enable, true), "Set ADC12 auto mute");
     ES7210_RETURN_ON_ERROR(es7210_auto_mute_select(hw_base, channel_mask, enable, false), "Set ADC34 auto mute");
@@ -117,11 +111,10 @@ static int es7210_auto_mute_enable(const audio_hw_mute_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es7210_set_auto_mute(const audio_hw_mute_t *h, const auto_mute_cfg_t *cfg)
+static int es7210_set_auto_mute(const audio_hw_base_t *hw_base, const esp_audio_hw_auto_mute_cfg_t *cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    const auto_mute_cfg_t *mute_cfg = cfg;
-    if (hw_base == NULL || mute_cfg == NULL) {
+    const esp_audio_hw_auto_mute_cfg_t *mute_cfg = cfg;
+    if (mute_cfg == NULL) {
         ESP_LOGE(TAG, "Set auto mute config failed: invalid handle");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -150,27 +143,7 @@ static int es7210_set_auto_mute(const audio_hw_mute_t *h, const auto_mute_cfg_t 
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es7210_mute_new(const audio_hw_base_t *h, audio_hw_mute_handle_t *mute)
-{
-    if (mute == NULL || h == NULL) {
-        ESP_LOGE(TAG, "Create mute failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*mute != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (audio_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create mute failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_mute_t *mute_handle = calloc(1, sizeof(audio_hw_mute_t));
-    if (mute_handle == NULL) {
-        ESP_LOGE(TAG, "Create mute failed: no memory");
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    mute_handle->base = h;
-    mute_handle->enable_auto_mute = es7210_auto_mute_enable;
-    mute_handle->set_auto_mute_cfg = es7210_set_auto_mute;
-    *mute = mute_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_mute_t es7210_mute_ops = {
+    .set_auto_mute_cfg = es7210_set_auto_mute,
+    .enable_auto_mute = es7210_auto_mute_enable,
+};

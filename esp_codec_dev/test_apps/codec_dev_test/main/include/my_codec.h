@@ -14,7 +14,7 @@
 #include "audio_codec_if.h"
 #include "audio_codec_ctrl_if.h"
 #include "audio_codec_gpio_if.h"
-#include "audio_hw_eq.h"
+#include "esp_audio_hw_eq.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,25 +77,25 @@ typedef struct {
  * @brief  Mock codec hardware audio processing state for unit tests
  */
 typedef struct {
-    float      alc_min_gain;
-    float      alc_max_gain;
-    float      alc_target_gain;
-    int        alc_channel_mask;
-    float      alc_noise_gate;
-    float      drc_min_gain;
-    float      drc_max_gain;
-    float      drc_offset_gain;
-    bool       drc_enabled;
-    int        eq_filter_num;
-    eq_para_t  eq_band[MY_CODEC_EQ_BAND_MAX];
-    bool       eq_enabled;
-    bool       line_in_enabled;
-    bool       line_out_enabled;
-    float      auto_mute_noise_gate;
-    float      auto_mute_vol;
-    bool       auto_mute_enabled;
-    float      soft_mute_ramp_rate;
-    bool       soft_mute_enabled;
+    float                   alc_min_gain;
+    float                   alc_max_gain;
+    float                   alc_target_gain;
+    int                     alc_channel_mask;
+    float                   alc_noise_gate;
+    float                   drc_min_gain;
+    float                   drc_max_gain;
+    float                   drc_offset_gain;
+    bool                    drc_enabled;
+    bool                    line_in_enabled;
+    bool                    line_out_enabled;
+    float                   auto_mute_noise_gate;
+    float                   auto_mute_vol;
+    bool                    auto_mute_enabled;
+    float                   soft_mute_ramp_rate;
+    bool                    soft_mute_enabled;
+    bool                    eq_enabled;
+    int                     eq_filter_num;
+    esp_audio_hw_eq_para_t  eq_band[MY_CODEC_EQ_BAND_MAX];
 } my_codec_proc_state_t;
 
 /**

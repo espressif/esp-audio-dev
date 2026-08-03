@@ -10,7 +10,7 @@
 
 #include "esp_codec_dev_os.h"
 #include "my_codec.h"
-#include "audio_hw_proc_if.h"
+#include "esp_audio_hw_proc_if.h"
 
 /**
  * Codec reset GPIO
@@ -36,7 +36,7 @@ typedef struct {
     bool                         enable;
 } my_codec_t;
 
-extern const audio_codec_hw_proc_ops_t my_codec_hw_proc;
+extern const esp_audio_hw_proc_ops_t my_codec_hw_proc;
 
 static const esp_codec_dev_vol_range_t vol_range = {
     .min_vol = {

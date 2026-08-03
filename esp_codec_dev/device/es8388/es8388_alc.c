@@ -5,13 +5,11 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
-#include "esp_check.h"
 #include "esp_log.h"
 
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es8388_reg.h"
-#include "es8388_proc_priv.h"
 
 static const char *TAG = "ES8388_ALC";
 
@@ -43,10 +41,9 @@ static inline void _limit_to_min_max(int *data, int min, int max)
     *data = temp;
 }
 
-static int es8388_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_cfg)
+static int es8388_alc_init(const audio_hw_base_t *hw_base, const esp_audio_hw_alc_cfg_t *alc_cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL || alc_cfg == NULL) {
+    if (alc_cfg == NULL) {
         ESP_LOGE(TAG, "Initialize ALC failed: invalid handle");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -82,10 +79,10 @@ static int es8388_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_c
     int noise_gate_reg = (int)((alc_cfg->noise_gate_threshold + 76.5) / 1.5);
     _limit_to_min_max(&noise_gate_reg, 0x00, 0x1F);
     reg = (noise_gate_reg << 3);
-    if (alc_cfg->noise_gate_mode != ALC_NOISE_GATE_DISABLE) {
+    if (alc_cfg->noise_gate_mode != ESP_AUDIO_HW_ALC_NOISE_GATE_DISABLE) {
         reg |= 0x01;
     }
-    if (alc_cfg->noise_gate_mode == ALC_NOISE_GATE_MUTE_ADC) {
+    if (alc_cfg->noise_gate_mode == ESP_AUDIO_HW_ALC_NOISE_GATE_MUTE_ADC) {
         reg |= 0x02;
     }
     ES8388_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES8388_ADCCONTROL14, reg), "Set ALC noise gate");
@@ -93,13 +90,8 @@ static int es8388_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_c
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8388_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
+static int es8388_set_alc_channel(const audio_hw_base_t *hw_base, int channel_mask)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set ALC channel failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int res = 0;
     int reg = 0;
     res = audio_hw_get_reg(hw_base, ES8388_ADCCONTROL10, &reg);
@@ -132,13 +124,8 @@ static int es8388_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8388_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain)
+static int es8388_set_alc_target_gain(const audio_hw_base_t *hw_base, float target_gain)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set ALC gain failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int res = 0;
     int reg = 0;
     res = audio_hw_get_reg(hw_base, ES8388_ADCCONTROL11, &reg);
@@ -154,13 +141,8 @@ static int es8388_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8388_set_noise_gate(const audio_hw_alc_t *h, float threshold)
+static int es8388_set_noise_gate(const audio_hw_base_t *hw_base, float threshold)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set noise gate failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int res = 0;
     int reg = 0;
     res = audio_hw_get_reg(hw_base, ES8388_ADCCONTROL14, &reg);
@@ -176,27 +158,9 @@ static int es8388_set_noise_gate(const audio_hw_alc_t *h, float threshold)
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es8388_alc_new(const audio_hw_base_t *h, audio_hw_alc_handle_t *alc)
-{
-    ESP_RETURN_ON_FALSE(alc, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    ESP_RETURN_ON_FALSE(h, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    if (*alc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (audio_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create ALC failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_alc_t *alc_handle = calloc(1, sizeof(audio_hw_alc_t));
-    if (alc_handle == NULL) {
-        ESP_LOGE(TAG, "Create ALC failed: no memory");
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    alc_handle->base = h;
-    alc_handle->set_gain = es8388_set_alc_target_gain;
-    alc_handle->set_channel = es8388_set_alc_channel;
-    alc_handle->init = es8388_alc_init;
-    alc_handle->set_noise_gate = es8388_set_noise_gate;
-    *alc = alc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_alc_t es8388_alc_ops = {
+    .init = es8388_alc_init,
+    .set_gain = es8388_set_alc_target_gain,
+    .set_channel = es8388_set_alc_channel,
+    .set_noise_gate = es8388_set_noise_gate,
+};
