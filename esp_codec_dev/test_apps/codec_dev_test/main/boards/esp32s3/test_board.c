@@ -801,6 +801,151 @@ static void test_case_playing_while_recording_use_tdm_mode(void)
     ut_clr_i2s_mode();
 }
 
+/**
+ * Duplex TDM: play 4 slots / mask 0x01, record 6 slots / mask 0x03.
+ * Only verifies that capture data is not constant via codec_max_sample.
+ */
+static void test_case_play_4ch_record_6ch_tdm(void)
+{
+#if SOC_I2S_SUPPORTS_TDM
+    ut_set_i2s_mode(I2S_COMM_MODE_TDM, I2S_COMM_MODE_TDM);
+#else
+    TEST_ESP_OK(-1);
+#endif  /* SOC_I2S_SUPPORTS_TDM */
+    int ret = ut_i2c_init(0, NULL);
+    TEST_ESP_OK(ret);
+    ret = ut_i2s_init(0, NULL, I2S_CLK_SRC_DEFAULT);
+    TEST_ESP_OK(ret);
+
+    audio_codec_i2s_cfg_t i2s_cfg = {
+        .rx_handle = ut_i2s_get_rx_handle(0),
+        .tx_handle = ut_i2s_get_tx_handle(0),
+    };
+    const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    TEST_ASSERT_NOT_NULL(data_if);
+
+    audio_codec_i2c_cfg_t i2c_cfg = {.addr = ES8311_CODEC_DEFAULT_ADDR};
+    i2c_cfg.bus_handle = ut_i2c_get_bus_handle();
+    const audio_codec_ctrl_if_t *out_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    TEST_ASSERT_NOT_NULL(out_ctrl_if);
+
+    i2c_cfg.addr = ES7210_CODEC_DEFAULT_ADDR;
+    const audio_codec_ctrl_if_t *in_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    TEST_ASSERT_NOT_NULL(in_ctrl_if);
+
+    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    TEST_ASSERT_NOT_NULL(gpio_if);
+
+    es8311_codec_cfg_t es8311_cfg = {
+        .ctrl_if = out_ctrl_if,
+        .gpio_if = gpio_if,
+        .sys_cfg = {
+            .is_master = false,
+            .no_mclk = false,
+        },
+        .pa_cfg = {
+            .pa_pin = TEST_BOARD_PA_PIN,
+            .pa_active_low = false,
+        },
+    };
+    const audio_codec_if_t *out_codec_if = es8311_codec_new(&es8311_cfg);
+    TEST_ASSERT_NOT_NULL(out_codec_if);
+
+    es7210_codec_cfg_t es7210_cfg = {
+        .ctrl_if = in_ctrl_if,
+        .sys_cfg = {
+            .is_master = false,
+            .no_mclk = false,
+        },
+    };
+    const audio_codec_if_t *in_codec_if = es7210_codec_new(&es7210_cfg);
+    TEST_ASSERT_NOT_NULL(in_codec_if);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = out_codec_if,
+        .data_if = data_if,
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+    };
+    esp_codec_dev_handle_t play_dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(play_dev);
+    dev_cfg.codec_if = in_codec_if;
+    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
+    esp_codec_dev_handle_t record_dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(record_dev);
+
+    ret = esp_codec_dev_set_out_vol(play_dev, 80);
+    TEST_ESP_OK(ret);
+    ret = esp_codec_dev_set_in_gain(record_dev, TEST_CODEC_BOARD_IN_GAIN);
+    TEST_ESP_OK(ret);
+
+    /* Record opens first so the duplex frame is sized to 6 * 16 bits. */
+    esp_codec_dev_sample_info_t record_fs = {
+        .sample_rate = 48000,
+        .channel = 6,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(1),
+        .mclk_multiple = 384,
+    };
+    // ch1 ch3 NA ch2 ch4 NA
+    ret = esp_codec_dev_open(record_dev, &record_fs);
+    TEST_ESP_OK(ret);
+
+    esp_codec_dev_sample_info_t play_fs = {
+        .sample_rate = 48000,
+        .channel = 4,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(2),
+        .mclk_multiple = 384,
+    };
+    // ch1 NA NA NA
+    ret = esp_codec_dev_open(play_dev, &play_fs);
+    TEST_ESP_OK(ret);
+
+    /* Active DMA channels follow the mask popcount, not total_slot. */
+    const int chunk_frames = 240 * 3;
+    const int play_active_ch = 2;
+    const int record_active_ch = 2;
+    const int bytes_per_sample = play_fs.bits_per_sample >> 3;
+    int play_bytes = chunk_frames * play_active_ch * bytes_per_sample;
+    int record_bytes = chunk_frames * record_active_ch * bytes_per_sample;
+    uint8_t *data = (uint8_t *)malloc(record_bytes);
+    TEST_ASSERT_NOT_NULL(data);
+    int limit_size = 5 * record_fs.sample_rate * record_active_ch * bytes_per_sample;
+    int got_size = 0;
+
+    esp_codec_dev_sleep(200);
+    while (got_size < limit_size) {
+        ret = esp_codec_dev_read(record_dev, data, record_bytes);
+        test_print_pcm_s16_head(data, 4);
+        TEST_ESP_OK(ret);
+        ret = esp_codec_dev_write(play_dev, data, play_bytes);
+        TEST_ESP_OK(ret);
+        int max_sample, min_sample;
+        codec_max_sample(data, record_bytes, &max_sample, &min_sample);
+        TEST_ASSERT(max_sample > min_sample);
+        got_size += record_bytes;
+    }
+    free(data);
+
+    ret = esp_codec_dev_close(play_dev);
+    TEST_ESP_OK(ret);
+    ret = esp_codec_dev_close(record_dev);
+    TEST_ESP_OK(ret);
+    esp_codec_dev_delete(play_dev);
+    esp_codec_dev_delete(record_dev);
+
+    audio_codec_delete_codec_if(in_codec_if);
+    audio_codec_delete_codec_if(out_codec_if);
+    audio_codec_delete_ctrl_if(in_ctrl_if);
+    audio_codec_delete_ctrl_if(out_ctrl_if);
+    audio_codec_delete_gpio_if(gpio_if);
+    audio_codec_delete_data_if(data_if);
+
+    ut_i2c_deinit(0);
+    ut_i2s_deinit(0);
+    ut_clr_i2s_mode();
+}
+
 TEST_CASE("Record play overlap test", "[korvo2_v3][duplex]")
 {
     test_case_record_play_overlap();
@@ -809,6 +954,11 @@ TEST_CASE("Record play overlap test", "[korvo2_v3][duplex]")
 TEST_CASE("Playing while recording use TDM mode", "[korvo2_v3][duplex]")
 {
     test_case_playing_while_recording_use_tdm_mode();
+}
+
+TEST_CASE("Play es8311 with 4ch and record es7210 with 6ch TDM", "[korvo2_v3][duplex]")
+{
+    test_case_play_4ch_record_6ch_tdm();
 }
 
 TEST_CASE("esp codec dev test using S3 board", "[korvo2_v3][duplex]")

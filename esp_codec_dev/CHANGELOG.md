@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.0-beta2
+
+### Bug Fixed
+
+- Fixed I2S TDM mono setup: the 1-channel to 2-slot promotion is done on an internal copy so the caller's `esp_codec_dev_sample_info_t` is not modified, and `ws_width` follows the actual slot count.
+- Fixed slot bit width exceeding the 32-bit hardware limit after duplex peer negotiation; unsupported widths now return `ESP_CODEC_DEV_NOT_SUPPORT` instead of being silently truncated.
+- Fixed the `espressif/usb_host_uac` dependency rule, which was gated on `$CONFIG{CODEC_UAC_SUPPORT}` and could fail to resolve the component.
+- Fixed ES8311 initialization on boards where the first I2C write returns an error, by ignoring the result of the dummy write to `ES8311_GPIO_REG44`.
+
 ## v2.0.0-beta1
 
 ### Feature

@@ -57,6 +57,8 @@ variables:
   variables:
     LOG_PATH: "$CI_PROJECT_DIR/log_ut_make"
     OUTPUT_PATH: ${IDF_PATH}/tools/unit-test-app/output
+    # Build every app in apps.yaml instead of only those touched by the MR diff
+    FULL_TEST: "1"
   script:
     - common_script
     - cd $PROJECT_ROOT
