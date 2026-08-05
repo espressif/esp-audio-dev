@@ -106,7 +106,7 @@ flowchart TB
     DataIf["audio_codec_data_if_t"]
     CtrlIf["audio_codec_ctrl_if_t"]
     GpioIf["audio_codec_gpio_if_t"]
-    HwProc["audio_codec_hw_proc_ops_t"]
+    HwProc["esp_audio_hw_proc_ops_t"]
     HW["Codec / I2S / ADC / USB"]
 
     App --> Dev
@@ -120,7 +120,7 @@ flowchart TB
     GpioIf --> HW
 ```
 
-`esp_codec_dev` 绑定一个 `audio_codec_if_t` 与一个 `audio_codec_data_if_t`。芯片接口由芯片配置构造（例如 `es8311_codec_new()` 或 `audio_codec_new("es8311", &cfg, sizeof(cfg))`），数据接口由总线实现构造（例如 `audio_codec_new_i2s_data()`）。`audio_codec_if_t` 内部由 `hw_base` 负责 open/close、采样格式、寄存器、order 列表与 caps；`adc` 与 `dac` 提供方向相关的 enable、音量、增益与 mute；可选 `hw_proc` 用于创建 ALC/DRC/EQ/line/mute 硬件音频处理句柄。
+`esp_codec_dev` 绑定一个 `audio_codec_if_t` 与一个 `audio_codec_data_if_t`。芯片接口由芯片配置构造（例如 `es8311_codec_new()` 或 `audio_codec_new("es8311", &cfg, sizeof(cfg))`），数据接口由总线实现构造（例如 `audio_codec_new_i2s_data()`）。`audio_codec_if_t` 内部由 `hw_base` 负责 open/close、采样格式、寄存器、order 列表与 caps；`adc` 与 `dac` 提供方向相关的 enable、音量、增益与 mute；可选 `hw_proc` 提供 ALC/DRC/EQ/line/mute 实现表，由 `esp_audio_hw_*()` 派发。
 
 ## 目录结构
 
@@ -128,8 +128,8 @@ flowchart TB
 | --- | --- |
 | `include/` | 主公开 API：`esp_codec_dev.h`、类型定义、音量接口与默认配置（含 `audio_codec_cfg_t`、`audio_codec_new()`） |
 | `include/impl/` | 扩展接口：UAC 管理与 ADC 数据接口 |
-| `include/hw_proc/` | 硬件音频处理头文件（ALC、DRC、EQ、line、mute） |
-| `interface/` | 控制、数据、GPIO、codec 基类接口，以及共享硬件子配置 `audio_codec_hw_cfg.h` |
+| `include/hw_proc/` | 硬件音频处理应用侧头文件（`esp_audio_hw_alc.h` 等） |
+| `interface/` | 控制、数据、GPIO、codec 基类接口、`esp_audio_hw_proc_if.h`，以及共享硬件子配置 `audio_codec_hw_cfg.h` |
 | `device/` | 各芯片驱动及 `device/include/` 配置头 |
 | `platform/` | ESP-IDF 平台绑定（I2C、I2S、GPIO、ADC、USB UAC） |
 | `src/` | 主要实现、数据布局、软件音量与 hw_proc 派发 |
@@ -322,7 +322,6 @@ const audio_codec_if_t *my_codec_new(my_codec_cfg_t *codec_cfg);
 * I2S 模式（STD、TDM、PDM）由底层 I2S channel 决定，不要在 `esp_codec_dev_sample_info_t` 中传入 mode。
 * 读写或设置数据布局前需调用 `esp_codec_dev_open()`，`dev_type` 需与 codec 方向（IN、OUT、IN_OUT）一致。
 * 多麦板级使用 label 布局时，在初始化阶段设置 `adc_cfg.label`。
-* 删除 `audio_codec_if_t` 前需先删除其下的硬件音频处理句柄。
 * 各芯片驱动使用分组 `codec_cfg` 子配置，字段用法因芯片而异，见 [docs/features.md](docs/features.md)。
 * 不要在多个任务中并发调用同一 `audio_codec_data_if_t` 句柄。
 

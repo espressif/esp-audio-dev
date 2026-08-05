@@ -173,11 +173,11 @@ static const esp_codec_dev_vol_range_t vol_range = {
     },
 };
 
-static const audio_codec_hw_proc_ops_t hw_proc = {
-    .alc_new = audio_hw_es8311_alc_new,
-    .drc_new = audio_hw_es8311_drc_new,
-    .eq_new = audio_hw_es8311_eq_new,
-    .mute_new = audio_hw_es8311_mute_new,
+static const esp_audio_hw_proc_ops_t hw_proc = {
+    .alc = &es8311_alc_ops,
+    .drc = &es8311_drc_ops,
+    .eq = &es8311_eq_ops,
+    .mute = &es8311_mute_ops,
 };
 
 static const esp_codec_dev_device_map_info_t order_info[] = {

@@ -22,7 +22,7 @@
 
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
-#include "audio_hw_alc.h"
+#include "esp_audio_hw_alc.h"
 #include "test_board.h"
 #include "test_board_periph.h"
 #include "test_codec_print.h"
@@ -425,16 +425,15 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
     int limit_size = 10 * fs.sample_rate * fs.channel * (fs.bits_per_sample >> 3);
     int got_size = 0;
 
-    audio_hw_alc_handle_t alc = NULL;
-    audio_hw_alc_new(in_codec_if, &alc);
-    if (alc != NULL) {
-        int ret = 0;
-        audio_alc_cfg_t alc_cfg = DEFAULT_ALC_CONFIG();
-        ret |= audio_hw_alc_init(alc, &alc_cfg);
-        ret |= audio_hw_alc_set_channel_mask(alc, BIT(1));
-        ret |= audio_hw_alc_set_gain(alc, alc_cfg.target_gain);
-        ret |= audio_hw_alc_set_channel_mask(alc, 0x00);  // Disable ALC
+    esp_audio_hw_alc_cfg_t alc_cfg = ESP_AUDIO_HW_ALC_CFG_DEFAULT();
+    ret = esp_audio_hw_alc_init(record_dev, &alc_cfg);
+    if (ret == ESP_CODEC_DEV_NOT_SUPPORT) {
+        /* Chip has no ALC; skip */
+    } else {
         TEST_ESP_OK(ret);
+        TEST_ESP_OK(esp_audio_hw_alc_set_channel_mask(record_dev, BIT(1)));
+        TEST_ESP_OK(esp_audio_hw_alc_set_gain(record_dev, alc_cfg.target_gain));
+        TEST_ESP_OK(esp_audio_hw_alc_set_channel_mask(record_dev, 0x00));  // Disable ALC
     }
     esp_codec_dev_channel_map_t invalid_order = {
         .value = ESP_CODEC_DEV_CHANNEL_MAP(9, 0, 0, 0, 0, 0, 0, 0),
@@ -480,10 +479,6 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
     TEST_ESP_OK(ret);
     esp_codec_dev_delete(play_dev);
     esp_codec_dev_delete(record_dev);
-
-    if (alc != NULL) {
-        audio_hw_alc_delete(alc);
-    }
 
     // Delete codec interface
     audio_codec_delete_codec_if(in_codec_if);

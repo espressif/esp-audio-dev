@@ -5,12 +5,11 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
 #include "esp_log.h"
 
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es7210_reg.h"
-#include "es7210_proc_priv.h"
 
 static const char *TAG = "ES7210_ALC";
 
@@ -53,10 +52,9 @@ static int es7210_set_min_max_level(const audio_hw_base_t *hw_base, bool alc12, 
     return res;
 }
 
-static int es7210_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *alc_cfg)
+static int es7210_alc_init(const audio_hw_base_t *hw_base, const esp_audio_hw_alc_cfg_t *alc_cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL || alc_cfg == NULL) {
+    if (alc_cfg == NULL) {
         ESP_LOGE(TAG, "Initialize ALC failed: invalid handle");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -78,13 +76,8 @@ static inline int es7210_get_reg_by_max_gain(float max_gain)
     return reg;
 }
 
-static int es7210_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain)
+static int es7210_set_alc_target_gain(const audio_hw_base_t *hw_base, float target_gain)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set ALC gain failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int reg = es7210_get_reg_by_max_gain(target_gain);
     ES7210_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES7210_ADC1_ALC_GAIN_REG1E, reg), "Set ADC1 ALC gain");
     ES7210_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES7210_ADC2_ALC_GAIN_REG1D, reg), "Set ADC2 ALC gain");
@@ -93,45 +86,20 @@ static int es7210_set_alc_target_gain(const audio_hw_alc_t *h, float target_gain
     return ESP_CODEC_DEV_OK;
 }
 
-static int es7210_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
+static int es7210_set_alc_channel(const audio_hw_base_t *hw_base, int channel_mask)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    if (hw_base == NULL) {
-        ESP_LOGE(TAG, "Set ALC channel failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
     int reg = channel_mask;
     ES7210_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES7210_ALC_SELECT_REG16, reg), "Set ALC channel");
     if (channel_mask == 0) {
         ESP_LOGD(TAG, "Disable ALC");
-        return es7210_set_alc_target_gain(h, 0);
+        return es7210_set_alc_target_gain(hw_base, 0);
     }
     ESP_LOGD(TAG, "Reg(0x%x): 0x%x", ES7210_ALC_SELECT_REG16, reg);
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es7210_alc_new(const audio_hw_base_t *h, audio_hw_alc_handle_t *alc)
-{
-    if (h == NULL || alc == NULL) {
-        ESP_LOGE(TAG, "Create ALC failed: invalid handle");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*alc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (audio_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create ALC failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_alc_t *alc_handle = calloc(1, sizeof(audio_hw_alc_t));
-    if (alc_handle == NULL) {
-        ESP_LOGE(TAG, "Create ALC failed: no memory");
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    alc_handle->base = h;
-    alc_handle->set_gain = es7210_set_alc_target_gain;
-    alc_handle->set_channel = es7210_set_alc_channel;
-    alc_handle->init = es7210_alc_init;
-    *alc = alc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_alc_t es7210_alc_ops = {
+    .init = es7210_alc_init,
+    .set_gain = es7210_set_alc_target_gain,
+    .set_channel = es7210_set_alc_channel,
+};

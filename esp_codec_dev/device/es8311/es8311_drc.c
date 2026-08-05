@@ -5,13 +5,12 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
 #include "esp_check.h"
 #include "esp_log.h"
 
+#include "esp_audio_hw_proc_if.h"
+#include "audio_hw_base_priv.h"
 #include "es8311_reg.h"
-#include "es8311_proc_priv.h"
 
 static const char *TAG = "ES8311_DRC";
 
@@ -44,11 +43,8 @@ static int get_reg_by_target(float target)
     return reg;
 }
 
-static int es8311_drc_enable(const audio_hw_drc_t *h, bool enable)
+static int es8311_drc_enable(const audio_hw_base_t *hw_base, bool enable)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-
     int reg = 0;
     ES8311_RETURN_ON_ERROR(audio_hw_get_reg(hw_base, ES8311_DAC_REG34, &reg), "Get DRC enable");
     reg = enable == true ? (reg | 0x80) : (reg & 0x7F);
@@ -57,10 +53,8 @@ static int es8311_drc_enable(const audio_hw_drc_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_drc_init(const audio_hw_drc_t *h, const audio_drc_cfg_t *drc_cfg)
+static int es8311_drc_init(const audio_hw_base_t *hw_base, const esp_audio_hw_drc_cfg_t *drc_cfg)
 {
-    const audio_hw_base_t *hw_base = h->base;
-    ESP_RETURN_ON_FALSE(hw_base, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
     ESP_RETURN_ON_FALSE(drc_cfg, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
 
     int reg = 0;
@@ -71,26 +65,12 @@ static int es8311_drc_init(const audio_hw_drc_t *h, const audio_drc_cfg_t *drc_c
     ES8311_RETURN_ON_ERROR(audio_hw_set_reg(hw_base, ES8311_DAC_REG35, reg), "Set DRC gain");
     ESP_LOGD(TAG, "Reg(0x%x): 0x%x", ES8311_DAC_REG35, reg);
 
-    ES8311_RETURN_ON_ERROR(es8311_drc_enable(h, true), "Enable DRC");
+    ES8311_RETURN_ON_ERROR(es8311_drc_enable(hw_base, true), "Enable DRC");
 
     return ESP_CODEC_DEV_OK;
 }
 
-int audio_hw_es8311_drc_new(const audio_hw_base_t *h, audio_hw_drc_handle_t *drc)
-{
-    ESP_RETURN_ON_FALSE(drc, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    ESP_RETURN_ON_FALSE(h, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid handle");
-    if (*drc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    ESP_RETURN_ON_FALSE(audio_hw_is_open(h), ESP_CODEC_DEV_WRONG_STATE, TAG, "Codec is not opened");
-
-    audio_hw_drc_t *drc_handle = calloc(1, sizeof(audio_hw_drc_t));
-    ESP_RETURN_ON_FALSE(drc_handle, ESP_CODEC_DEV_NO_MEM, TAG, "No memory");
-
-    drc_handle->base = h;
-    drc_handle->init = es8311_drc_init;
-    drc_handle->enable = es8311_drc_enable;
-    *drc = drc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+const esp_audio_hw_drc_t es8311_drc_ops = {
+    .init = es8311_drc_init,
+    .enable = es8311_drc_enable,
+};
