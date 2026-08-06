@@ -548,7 +548,7 @@ static int es7210_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t *
         new_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
     }
 
-    if (fs->channel == 4) {
+    if (fs->channel >= 4) {
         new_mask = 0x0F;
     }
 

@@ -33,6 +33,14 @@ static const char *TAG = "I2S_IF";
 #define DEFAULT_WAIT_TIMEOUT    (1000)
 #define DISABLED_CHAN_SLEEP_MS  (10)
 #define I2S_DATA_MAX_CHANNELS   (8)
+#define I2S_SLOT_BITS_MAX       (32)
+
+/**
+ * @brief  Slot bit widths accepted by the I2S hardware
+ * @note  The slot bit width register field is 5 bits wide, so any value above
+ *         I2S_SLOT_BITS_MAX is silently truncated instead of being rejected.
+ */
+#define I2S_SLOT_BITS_IS_VALID(bits)  ((bits) == 8 || (bits) == 16 || (bits) == 24 || (bits) == 32)
 
 typedef struct i2s_data_t i2s_data_t;
 typedef struct i2s_port_group_t i2s_port_group_t;
@@ -632,12 +640,34 @@ static int _release_peer_ref(i2s_data_t *i2s_data, bool is_playback, bool disabl
  *         before calling this function, the caller is responsible for re-enabling
  *         it after reconfiguration completes.
  */
-static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, uint8_t slot_bits, i2s_clock_src_t clk_src, const esp_codec_dev_sample_info_t *fs)
+static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, int slot_bits, i2s_clock_src_t clk_src, const esp_codec_dev_sample_info_t *fs)
 {
+    if (!I2S_SLOT_BITS_IS_VALID(slot_bits)) {
+        ESP_LOGE(TAG, "Slot bit width %d is not supported, must be 8/16/24/32", slot_bits);
+        if (slot_bits > I2S_SLOT_BITS_MAX) {
+            int frame_bits = slot_bits * fs->channel;
+            int need_channel = (frame_bits + fs->bits_per_sample - 1) / fs->bits_per_sample;
+            ESP_LOGE(TAG, "Frame of %d bits cannot be built from %d channels of %d bits; "
+                          "increase the channel count to %d and keep the channel mask unchanged",
+                     frame_bits, (int)fs->channel, (int)fs->bits_per_sample, need_channel);
+        }
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
     i2s_chan_info_t chan_info = {0};
     int ret = ESP_CODEC_DEV_OK;
     if (i2s_channel_get_info(channel, &chan_info) != ESP_OK) {
         return ESP_CODEC_DEV_DRV_ERR;
+    }
+    // STD mode carries more than 2 channels as 2 slots of multiplied width; resolve it before touching the channel
+    if (chan_info.mode == I2S_COMM_MODE_STD && fs->channel > 2) {
+        int std_slot_bits = slot_bits * fs->channel / 2;
+        if (!I2S_SLOT_BITS_IS_VALID(std_slot_bits)) {
+            ESP_LOGE(TAG, "STD mode needs a %d-bit slot to carry %d channels of %d bits, which is not supported",
+                     std_slot_bits, (int)fs->channel, (int)fs->bits_per_sample);
+            ESP_LOGE(TAG, "Use TDM mode instead, where the frame is widened by adding slots rather than widening them");
+            return ESP_CODEC_DEV_NOT_SUPPORT;
+        }
+        slot_bits = std_slot_bits;
     }
     if (chan_info.is_enabled) {
         ESP_LOGD(TAG, "Channel is enabled, need disable first");
@@ -666,14 +696,12 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, uint8_t slot
             int slot_mask = (fs->channel > 2) ? I2S_STD_SLOT_BOTH : fs->channel_mask;
             slot_mask = slot_mask & I2S_STD_SLOT_BOTH;
             i2s_slot_mode_t slot_mode = (slot_mask == I2S_STD_SLOT_BOTH) ? I2S_SLOT_MODE_STEREO : I2S_SLOT_MODE_MONO;
-            // STD use 2ch 32bit to get 4ch 16bit data
+            // STD use 2ch 32bit to get 4ch 16bit data, slot_bits was already widened on entry
             if (fs->channel > 2) {
 #if SOC_I2S_HW_VERSION_2
                 ESP_LOGW(TAG, "TDM mode is recommended for 4-channel 16-bit data; avoid using STD mode with 2-channel 32-bit data");
 #endif  /* SOC_I2S_HW_VERSION_2 */
-                // Convert to 2ch 32bit from 4ch 16bit
-                slot_bits = slot_bits * fs->channel / 2;
-                data_bits = slot_bits;
+                data_bits = (uint8_t)slot_bits;
             }
             i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(data_bits, slot_mode);
             slot_cfg.slot_mask = slot_mask;
@@ -818,7 +846,7 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, uint8_t slot
             slot_cfg.left_align = true;  // Use left align mode to keep the same with STD mode
             slot_cfg.data_bit_width = fs->bits_per_sample;
             slot_cfg.slot_bit_width = slot_bits;
-            slot_cfg.ws_width = slot_bits * fs->channel / 2;
+            slot_cfg.ws_width = slot_bits * slot_cfg.total_slot / 2;
             ret = i2s_channel_reconfig_tdm_slot(channel, &slot_cfg);
             if (ret != ESP_OK) {
                 return ESP_CODEC_DEV_DRV_ERR;
@@ -846,7 +874,7 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, uint8_t slot
 
 #if SOC_I2S_HW_VERSION_1
 static int _set_drv_fs_with_peer_sync(i2s_chan_handle_t active_channel, i2s_chan_handle_t peer_channel, bool is_playback,
-                                      uint8_t slot_bits, i2s_clock_src_t clk_src, const esp_codec_dev_sample_info_t *fs)
+                                      int slot_bits, i2s_clock_src_t clk_src, const esp_codec_dev_sample_info_t *fs)
 {
     bool peer_reenable = false;
     // On shared-clock duplex ports, reconfiguring one side while the peer master keeps running can leave channels out of sync.
@@ -984,6 +1012,10 @@ static int _check_fs_compatible(i2s_data_t *i2s_data, bool is_playback, const es
     if (active_total_bits < peer_total_bits) {
         // The active side is narrower than the peer, so widen the active side.
         // Example: peer_total_bits=64, active_total_bits=32.
+        if ((max_total_bits % fs->channel) != 0) {
+            ESP_LOGE(TAG, "Peer frame of %d bits cannot be split evenly across %d channels", max_total_bits, (int)fs->channel);
+            return ESP_CODEC_DEV_NOT_SUPPORT;
+        }
         int slot_bit = max_total_bits / fs->channel;
         int ret = 0;
 #if SOC_I2S_HW_VERSION_1
@@ -1004,6 +1036,11 @@ static int _check_fs_compatible(i2s_data_t *i2s_data, bool is_playback, const es
     } else {
         // The peer side is narrower than the active side, so widen the peer side first.
         // Example: peer_total_bits=32, active_total_bits=64.
+        if ((max_total_bits % peer_fs->channel) != 0) {
+            ESP_LOGE(TAG, "Active frame of %d bits cannot be split evenly across %d peer channels",
+                     max_total_bits, (int)peer_fs->channel);
+            return ESP_CODEC_DEV_NOT_SUPPORT;
+        }
         int slot_bit = max_total_bits / peer_fs->channel;
         int ret = _set_drv_fs(peer_channel, !is_playback, slot_bit, i2s_data->clk_src, peer_fs);
         if (ret != ESP_CODEC_DEV_OK) {
@@ -1205,9 +1242,16 @@ static bool _check_fs_param(esp_codec_dev_sample_info_t *fs)
         ESP_LOGE(TAG, "Channel count %d is not supported", fs->channel);
         return false;
     }
-    if ((fs->channel_mask >= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(fs->channel)) || fs->channel_mask == 0) {
+    if (fs->channel == 1) {
+        fs->channel = 2;
+        fs->channel_mask = 0x01;
+    }
+    if ((fs->channel_mask >= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(fs->channel))) {
         ESP_LOGE(TAG, "Channel mask 0x%x is not supported", fs->channel_mask);
         return false;
+    }
+    if (fs->channel_mask == 0) {
+        fs->channel_mask = (uint16_t)((1U << fs->channel) - 1U);
     }
     if (!(fs->bits_per_sample == 8 || fs->bits_per_sample == 16
           || fs->bits_per_sample == 24 || fs->bits_per_sample == 32)
@@ -1229,7 +1273,12 @@ static bool _check_fs_param(esp_codec_dev_sample_info_t *fs)
 static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_t dev_type, esp_codec_dev_sample_info_t *fs)
 {
     i2s_data_t *i2s_data = (i2s_data_t *)h;
-    if (i2s_data == NULL || !_check_fs_param(fs)) {
+    if (i2s_data == NULL || fs == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    /* Normalize into an internal copy so the caller's logical format stays unchanged. */
+    esp_codec_dev_sample_info_t hw_fs = *fs;
+    if (!_check_fs_param(&hw_fs)) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     if (!i2s_data->is_open) {
@@ -1244,20 +1293,20 @@ static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_
             _i2s_unlock(i2s_data);
             return ESP_CODEC_DEV_INVALID_ARG;
         }
-        memcpy(&i2s_data->rx.fs, fs, sizeof(esp_codec_dev_sample_info_t));
-        memcpy(&i2s_data->tx.fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        memcpy(&i2s_data->rx.fs, &hw_fs, sizeof(hw_fs));
+        memcpy(&i2s_data->tx.fs, &hw_fs, sizeof(hw_fs));
         i2s_chan_handle_t channel = (i2s_chan_handle_t)i2s_data->tx.handle;
-        ret = _set_drv_fs(channel, true, fs->bits_per_sample, i2s_data->clk_src, fs);
+        ret = _set_drv_fs(channel, true, hw_fs.bits_per_sample, i2s_data->clk_src, &hw_fs);
         if (ret != ESP_CODEC_DEV_OK) {
             _i2s_unlock(i2s_data);
             return ret;
         }
         channel = (i2s_chan_handle_t)i2s_data->rx.handle;
-        ret = _set_drv_fs(channel, false, fs->bits_per_sample, i2s_data->clk_src, fs);
-        i2s_data->total_slot_bits = fs->bits_per_sample * fs->channel;
+        ret = _set_drv_fs(channel, false, hw_fs.bits_per_sample, i2s_data->clk_src, &hw_fs);
+        i2s_data->total_slot_bits = hw_fs.bits_per_sample * hw_fs.channel;
     } else {
         bool is_playback = dev_type & ESP_CODEC_DEV_TYPE_OUT ? true : false;
-        ret = _check_fs_compatible(i2s_data, is_playback, fs);
+        ret = _check_fs_compatible(i2s_data, is_playback, &hw_fs);
     }
     int unlock_ret = _i2s_unlock(i2s_data);
     return ret == ESP_CODEC_DEV_OK ? unlock_ret : ret;

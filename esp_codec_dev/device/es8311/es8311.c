@@ -610,15 +610,15 @@ static int es8311_open(const audio_hw_base_t *h, void *cfg, int cfg_size)
     int regv = 0;
     int ret = ESP_CODEC_DEV_OK;
 
-    ret = es8311_read_reg(codec, ES8311_SYSTEM_REG0D, &regv);
-    if (regv != 0xFA) {
-        ret |= es8311_write_reg(codec, ES8311_SYSTEM_REG0D, 0xFA);
-    }
-
     /* Enhance ES8311 I2C noise immunity */
-    ret |= es8311_write_reg(codec, ES8311_GPIO_REG44, 0x08);
+    es8311_write_reg(codec, ES8311_GPIO_REG44, 0x08);
     /* Due to occasional failures during the first I2C write with the ES8311 chip, a second write is performed to ensure reliability */
     ret |= es8311_write_reg(codec, ES8311_GPIO_REG44, 0x08);
+
+    ret |= es8311_read_reg(codec, ES8311_SYSTEM_REG0D, &regv);
+    if (regv != 0xFA) {
+        es8311_write_reg(codec, ES8311_SYSTEM_REG0D, 0xFA);
+    }
 
     ret |= es8311_write_reg(codec, ES8311_CLK_MANAGER_REG01, 0x30);
     ret |= es8311_write_reg(codec, ES8311_CLK_MANAGER_REG02, 0x00);
