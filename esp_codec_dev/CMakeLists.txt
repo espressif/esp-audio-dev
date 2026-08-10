@@ -14,11 +14,12 @@ set(COMPONENT_SRCS
   src/audio_hw_base.c
   src/esp_codec_dev.c
   src/esp_codec_dev_vol.c
-  src/hw_proc/audio_hw_alc.c
-  src/hw_proc/audio_hw_drc.c
-  src/hw_proc/audio_hw_line.c
-  src/hw_proc/audio_hw_mute.c
-  src/hw_proc/audio_hw_eq.c
+  src/hw_proc/esp_audio_hw_alc.c
+  src/hw_proc/esp_audio_hw_drc.c
+  src/hw_proc/esp_audio_hw_line.c
+  src/hw_proc/esp_audio_hw_mute.c
+  src/hw_proc/esp_audio_hw_eq.c
+  src/hw_proc/esp_audio_hw_proc.c
 )
 
 set(priv_requires
@@ -134,7 +135,8 @@ idf_component_register(SRCS "${COMPONENT_SRCS}"
                        INCLUDE_DIRS "${COMPONENT_ADD_INCLUDEDIRS}"
                        PRIV_INCLUDE_DIRS "${COMPONENT_PRIV_INCLUDEDIRS}"
                        PRIV_REQUIRES ${priv_requires}
-                       REQUIRES ${requires})
+                       REQUIRES ${requires}
+                       LDFRAGMENTS "linker.lf")
 
 idf_component_get_property(esp_codec_dev_version ${COMPONENT_NAME} COMPONENT_VERSION)
 if(esp_codec_dev_version)

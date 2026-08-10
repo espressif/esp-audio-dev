@@ -15,7 +15,7 @@ extern "C" {
 #endif  /* __cplusplus */
 
 typedef struct audio_codec_if_t audio_codec_if_t;
-typedef struct audio_codec_hw_proc_ops_t audio_codec_hw_proc_ops_t;
+typedef struct esp_audio_hw_proc_ops_t esp_audio_hw_proc_ops_t;
 
 /**
  * @brief  Codec ADC/DAC operation callbacks
@@ -46,19 +46,15 @@ typedef struct {
  * @brief  Unified codec interface structure
  */
 struct audio_codec_if_t {
-    audio_hw_base_t                  hw_base;  /*!< Base hardware interface */
-    const audio_codec_ctrl_if_t     *ctrl_if;  /*!< Control interface */
-    const audio_hw_adc_if_t         *adc_if;   /*!< ADC interface, NULL if not supported */
-    const audio_hw_dac_if_t         *dac_if;   /*!< DAC interface, NULL if not supported */
-    const audio_codec_hw_proc_ops_t *hw_proc;  /*!< Optional hardware audio processing ops */
+    audio_hw_base_t                hw_base;  /*!< Base hardware interface */
+    const audio_codec_ctrl_if_t   *ctrl_if;  /*!< Control interface */
+    const audio_hw_adc_if_t       *adc_if;   /*!< ADC interface, NULL if not supported */
+    const audio_hw_dac_if_t       *dac_if;   /*!< DAC interface, NULL if not supported */
+    const esp_audio_hw_proc_ops_t *hw_proc;  /*!< Optional hardware audio processing ops */
 };
 
 /**
  * @brief  Delete a codec interface instance
- *
- * @note  All hardware audio processing handles created from this codec interface must be deleted
- *        before calling this function. Any processing handle that still references this codec
- *        interface becomes invalid after this function returns.
  *
  * @param[in]  codec_if  Codec interface returned by audio_codec_new()
  *

@@ -39,14 +39,16 @@ set(srcs
 # list(APPEND srcs "mock/test_data_convert.c")
 
 if(CONFIG_IDF_TARGET_ESP32S3)
-    list(APPEND srcs "boards/es8389/test_board_es8389.c")
+    list(APPEND srcs "boards/esp32s31/test_board_es8389.c")
     list(APPEND srcs "boards/esp32s3/test_board_i2s_open_order.c")
     list(APPEND srcs "boards/esp32s3/test_board_single_channel.c")
     list(APPEND srcs "boards/esp32s3/test_board.c")
+    list(APPEND srcs "boards/esp32s3/test_board_aw88298.c")
 endif()
 
 if(CONFIG_IDF_TARGET_ESP32S31)
-    list(APPEND srcs "boards/es8389/test_board_es8389.c")
+    list(APPEND srcs "boards/esp32s31/test_board_es8389.c")
+    list(APPEND srcs "boards/esp32s31/test_board_chatbot.c")
 endif()
 
 if(CONFIG_IDF_TARGET_ESP32)

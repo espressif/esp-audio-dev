@@ -19,6 +19,7 @@
 #include "codec_dev_order.h"
 #include "codec_dev_data_cvt.h"
 #include "codec_dev_mirror.h"
+#include "audio_codec_hw_proc.h"
 
 static const char *TAG = "ADEV_CODEC";
 
@@ -52,6 +53,12 @@ typedef struct {
     int  req_ch_num;
     int  bus_len;
 } layout_frame_info_t;
+
+const audio_codec_if_t *esp_audio_hw_proc_get_codec_if(esp_codec_dev_handle_t handle)
+{
+    codec_dev_t *dev = (codec_dev_t *)handle;
+    return dev ? dev->codec_if : NULL;
+}
 
 static inline const char *esp_codec_dev_i2s_mode_to_string(esp_codec_dev_i2s_mode_t mode)
 {
@@ -747,12 +754,14 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
     if (data_if->set_fmt) {
         ret = data_if->set_fmt(data_if, dev->dev_caps, &verified_fs);
         if (ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Failed to set data interface format, ret=0x%x", ret);
             goto open_cleanup;
         }
     }
     if (data_if->enable) {
         ret = data_if->enable(data_if, dev->dev_caps, true);
         if (ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Failed to enable data interface, ret=0x%x", ret);
             goto open_cleanup;
         }
         data_if_enabled = true;
@@ -762,12 +771,13 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
             ret = codec->hw_base.set_fs(&codec->hw_base, &verified_fs, dev->dev_caps);
             if (ret != 0) {
                 ret = ESP_CODEC_DEV_NOT_SUPPORT;
+                ESP_LOGE(TAG, "Failed to set codec format, ret=0x%x", ret);
                 goto open_cleanup;
             }
         }
         if (input_opened && codec->adc_if && codec->adc_if->ops.enable) {
             if (codec->adc_if->ops.enable(codec, true) != ESP_CODEC_DEV_OK) {
-                ESP_LOGE(TAG, "Failed to enable ADC");
+                ESP_LOGE(TAG, "Failed to enable ADC, ret=0x%x", ret);
                 ret = ESP_CODEC_DEV_DRV_ERR;
                 goto open_cleanup;
             }
@@ -775,7 +785,7 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         }
         if (output_opened && codec->dac_if && codec->dac_if->ops.enable) {
             if (codec->dac_if->ops.enable(codec, true) != ESP_CODEC_DEV_OK) {
-                ESP_LOGE(TAG, "Failed to enable DAC");
+                ESP_LOGE(TAG, "Failed to enable DAC, ret=0x%x", ret);
                 ret = ESP_CODEC_DEV_DRV_ERR;
                 goto open_cleanup;
             }
@@ -810,7 +820,8 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         _resolve_layout_from_fs(dev, &verified_fs, cur_mode, &cur_map);
         dev->cur_order = cur_map;
     }
-    ESP_LOGI(TAG, "Opened %d codec device, current map is 0x%lX", dev->dev_caps, (unsigned long)dev->cur_order.value);
+    const char *codec_name[] = {"None", "Input", "Output", "Input and Output"};
+    ESP_LOGI(TAG, "Opened %s codec device, current map is 0x%lX", codec_name[dev->dev_caps], (unsigned long)dev->cur_order.value);
     return ESP_CODEC_DEV_OK;
 
 open_cleanup:

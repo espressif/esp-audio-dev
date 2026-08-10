@@ -5,23 +5,12 @@
  * See LICENSE file for details.
  */
 
-#include <stdlib.h>
-
-#include "esp_log.h"
-
 #include "my_codec.h"
-#include "audio_hw_proc_if.h"
+#include "esp_audio_hw_proc_if.h"
 
-static const char *TAG = "MY_CODEC_PROC";
-
-static inline bool my_codec_hw_is_open(const audio_hw_base_t *h)
+static int my_codec_alc_init(const audio_hw_base_t *h, const esp_audio_hw_alc_cfg_t *cfg)
 {
-    return h != NULL && h->is_open != NULL && h->is_open(h);
-}
-
-static int my_codec_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *cfg)
-{
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || cfg == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -32,9 +21,9 @@ static int my_codec_alc_init(const audio_hw_alc_t *h, const audio_alc_cfg_t *cfg
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_alc_gain(const audio_hw_alc_t *h, float target_gain)
+static int my_codec_set_alc_gain(const audio_hw_base_t *h, float target_gain)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -42,9 +31,9 @@ static int my_codec_set_alc_gain(const audio_hw_alc_t *h, float target_gain)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
+static int my_codec_set_alc_channel(const audio_hw_base_t *h, int channel_mask)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -52,9 +41,9 @@ static int my_codec_set_alc_channel(const audio_hw_alc_t *h, int channel_mask)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_alc_noise_gate(const audio_hw_alc_t *h, float threshold)
+static int my_codec_set_alc_noise_gate(const audio_hw_base_t *h, float threshold)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -62,9 +51,9 @@ static int my_codec_set_alc_noise_gate(const audio_hw_alc_t *h, float threshold)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_drc_init(const audio_hw_drc_t *h, const audio_drc_cfg_t *cfg)
+static int my_codec_drc_init(const audio_hw_base_t *h, const esp_audio_hw_drc_cfg_t *cfg)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || cfg == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -74,9 +63,9 @@ static int my_codec_drc_init(const audio_hw_drc_t *h, const audio_drc_cfg_t *cfg
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_drc_offset_gain(const audio_hw_drc_t *h, float gain)
+static int my_codec_set_drc_offset_gain(const audio_hw_base_t *h, float gain)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -84,9 +73,9 @@ static int my_codec_set_drc_offset_gain(const audio_hw_drc_t *h, float gain)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_drc_enable(const audio_hw_drc_t *h, bool enable)
+static int my_codec_drc_enable(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -94,9 +83,9 @@ static int my_codec_drc_enable(const audio_hw_drc_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_eq_set_cfg(const audio_hw_eq_t *h, const audio_eq_cfg_t *cfg)
+static int my_codec_eq_set_cfg(const audio_hw_base_t *h, const esp_audio_hw_eq_cfg_t *cfg)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || cfg == NULL || cfg->para == NULL || cfg->filter_num <= 0) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -111,9 +100,9 @@ static int my_codec_eq_set_cfg(const audio_hw_eq_t *h, const audio_eq_cfg_t *cfg
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_eq_set_para(const audio_hw_eq_t *h, const eq_para_t *para, int index)
+static int my_codec_eq_set_para(const audio_hw_base_t *h, const esp_audio_hw_eq_para_t *para, int index)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || para == NULL || index < 0 || index >= MY_CODEC_EQ_BAND_MAX) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -124,9 +113,9 @@ static int my_codec_eq_set_para(const audio_hw_eq_t *h, const eq_para_t *para, i
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_eq_enable(const audio_hw_eq_t *h, bool enable)
+static int my_codec_eq_enable(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -134,17 +123,15 @@ static int my_codec_eq_enable(const audio_hw_eq_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_eq_dump_info(const audio_hw_eq_t *h)
+static int my_codec_eq_dump_info(const audio_hw_base_t *h)
 {
-    if (h == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
+    (void)h;
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_line_in(const audio_hw_line_t *h, bool enable)
+static int my_codec_line_in(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -152,9 +139,9 @@ static int my_codec_line_in(const audio_hw_line_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_line_out(const audio_hw_line_t *h, bool enable)
+static int my_codec_line_out(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -162,9 +149,9 @@ static int my_codec_line_out(const audio_hw_line_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_auto_mute_cfg(const audio_hw_mute_t *h, const auto_mute_cfg_t *cfg)
+static int my_codec_set_auto_mute_cfg(const audio_hw_base_t *h, const esp_audio_hw_auto_mute_cfg_t *cfg)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || cfg == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -173,9 +160,9 @@ static int my_codec_set_auto_mute_cfg(const audio_hw_mute_t *h, const auto_mute_
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_auto_mute(const audio_hw_mute_t *h, bool enable)
+static int my_codec_auto_mute(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -183,9 +170,9 @@ static int my_codec_auto_mute(const audio_hw_mute_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_set_soft_mute_cfg(const audio_hw_mute_t *h, const soft_mute_cfg_t *cfg)
+static int my_codec_set_soft_mute_cfg(const audio_hw_base_t *h, const esp_audio_hw_soft_mute_cfg_t *cfg)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL || cfg == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -193,9 +180,9 @@ static int my_codec_set_soft_mute_cfg(const audio_hw_mute_t *h, const soft_mute_
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_soft_mute(const audio_hw_mute_t *h, bool enable)
+static int my_codec_soft_mute(const audio_hw_base_t *h, bool enable)
 {
-    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h->base);
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
     if (proc == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -203,132 +190,42 @@ static int my_codec_soft_mute(const audio_hw_mute_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int my_codec_alc_new(const audio_hw_base_t *h, audio_hw_alc_handle_t *alc)
-{
-    if (h == NULL || alc == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*alc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (my_codec_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create ALC failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_alc_t *alc_handle = calloc(1, sizeof(audio_hw_alc_t));
-    if (alc_handle == NULL) {
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    alc_handle->base = h;
-    alc_handle->init = my_codec_alc_init;
-    alc_handle->set_gain = my_codec_set_alc_gain;
-    alc_handle->set_channel = my_codec_set_alc_channel;
-    alc_handle->set_noise_gate = my_codec_set_alc_noise_gate;
-    *alc = alc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+static const esp_audio_hw_alc_t my_codec_alc_ops = {
+    .init = my_codec_alc_init,
+    .set_gain = my_codec_set_alc_gain,
+    .set_channel = my_codec_set_alc_channel,
+    .set_noise_gate = my_codec_set_alc_noise_gate,
+};
 
-static int my_codec_drc_new(const audio_hw_base_t *h, audio_hw_drc_handle_t *drc)
-{
-    if (h == NULL || drc == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*drc != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (my_codec_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create DRC failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_drc_t *drc_handle = calloc(1, sizeof(audio_hw_drc_t));
-    if (drc_handle == NULL) {
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    drc_handle->base = h;
-    drc_handle->init = my_codec_drc_init;
-    drc_handle->set_offset_gain = my_codec_set_drc_offset_gain;
-    drc_handle->enable = my_codec_drc_enable;
-    *drc = drc_handle;
-    return ESP_CODEC_DEV_OK;
-}
+static const esp_audio_hw_drc_t my_codec_drc_ops = {
+    .init = my_codec_drc_init,
+    .set_offset_gain = my_codec_set_drc_offset_gain,
+    .enable = my_codec_drc_enable,
+};
 
-static int my_codec_eq_new(const audio_hw_base_t *h, audio_hw_eq_handle_t *eq)
-{
-    if (h == NULL || eq == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*eq != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (my_codec_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create EQ failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_eq_t *eq_handle = calloc(1, sizeof(audio_hw_eq_t));
-    if (eq_handle == NULL) {
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    eq_handle->base = h;
-    eq_handle->set_band_para = my_codec_eq_set_para;
-    eq_handle->set_cfg = my_codec_eq_set_cfg;
-    eq_handle->enable = my_codec_eq_enable;
-    eq_handle->dump_info = my_codec_eq_dump_info;
-    *eq = eq_handle;
-    return ESP_CODEC_DEV_OK;
-}
+static const esp_audio_hw_eq_t my_codec_eq_ops = {
+    .set_band_para = my_codec_eq_set_para,
+    .set_cfg = my_codec_eq_set_cfg,
+    .enable = my_codec_eq_enable,
+    .dump_info = my_codec_eq_dump_info,
+};
 
-static int my_codec_line_new(const audio_hw_base_t *h, audio_hw_line_handle_t *line)
-{
-    if (h == NULL || line == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*line != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (my_codec_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create line failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_line_t *line_handle = calloc(1, sizeof(audio_hw_line_t));
-    if (line_handle == NULL) {
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    line_handle->base = h;
-    line_handle->enable_in = my_codec_line_in;
-    line_handle->enable_out = my_codec_line_out;
-    *line = line_handle;
-    return ESP_CODEC_DEV_OK;
-}
+static const esp_audio_hw_line_t my_codec_line_ops = {
+    .enable_in = my_codec_line_in,
+    .enable_out = my_codec_line_out,
+};
 
-static int my_codec_mute_new(const audio_hw_base_t *h, audio_hw_mute_handle_t *mute)
-{
-    if (h == NULL || mute == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (*mute != NULL) {
-        return ESP_CODEC_DEV_OK;
-    }
-    if (my_codec_hw_is_open(h) == false) {
-        ESP_LOGE(TAG, "Create mute failed: codec is not open");
-        return ESP_CODEC_DEV_WRONG_STATE;
-    }
-    audio_hw_mute_t *mute_handle = calloc(1, sizeof(audio_hw_mute_t));
-    if (mute_handle == NULL) {
-        return ESP_CODEC_DEV_NO_MEM;
-    }
-    mute_handle->base = h;
-    mute_handle->set_auto_mute_cfg = my_codec_set_auto_mute_cfg;
-    mute_handle->enable_auto_mute = my_codec_auto_mute;
-    mute_handle->set_soft_mute_cfg = my_codec_set_soft_mute_cfg;
-    mute_handle->enable_soft_mute = my_codec_soft_mute;
-    *mute = mute_handle;
-    return ESP_CODEC_DEV_OK;
-}
+static const esp_audio_hw_mute_t my_codec_mute_ops = {
+    .set_auto_mute_cfg = my_codec_set_auto_mute_cfg,
+    .enable_auto_mute = my_codec_auto_mute,
+    .set_soft_mute_cfg = my_codec_set_soft_mute_cfg,
+    .enable_soft_mute = my_codec_soft_mute,
+};
 
-const audio_codec_hw_proc_ops_t my_codec_hw_proc = {
-    .alc_new  = my_codec_alc_new,
-    .drc_new  = my_codec_drc_new,
-    .eq_new   = my_codec_eq_new,
-    .line_new = my_codec_line_new,
-    .mute_new = my_codec_mute_new,
+const esp_audio_hw_proc_ops_t my_codec_hw_proc = {
+    .alc  = &my_codec_alc_ops,
+    .drc  = &my_codec_drc_ops,
+    .eq   = &my_codec_eq_ops,
+    .line = &my_codec_line_ops,
+    .mute = &my_codec_mute_ops,
 };

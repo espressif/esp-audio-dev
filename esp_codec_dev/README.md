@@ -46,7 +46,7 @@ Supported codec chips (playback / record / hardware audio processing). See [docs
 | ES7243 | N | Y | - | Y |
 | ES7243E | N | Y | - | Y |
 | ES8156 | Y | N | - | N |
-| AW88298 | Y | N | - | N |
+| AW88298 | Y | N | - | Y |
 | TAS5805M | Y | N | - | N |
 | ZL38063 | Y | N | - | N |
 | ES8311 | Y | Y | ALC, DRC, EQ, mute | Y |
@@ -106,7 +106,7 @@ flowchart TB
     DataIf["audio_codec_data_if_t"]
     CtrlIf["audio_codec_ctrl_if_t"]
     GpioIf["audio_codec_gpio_if_t"]
-    HwProc["audio_codec_hw_proc_ops_t"]
+    HwProc["esp_audio_hw_proc_ops_t"]
     HW["Codec / I2S / ADC / USB"]
 
     App --> Dev
@@ -120,7 +120,7 @@ flowchart TB
     GpioIf --> HW
 ```
 
-`esp_codec_dev` binds one `audio_codec_if_t` and one `audio_codec_data_if_t`. The chip interface is created from chip configuration (for example `es8311_codec_new()` or `audio_codec_new("es8311", &cfg, sizeof(cfg))`). The data interface is created from the bus implementation (for example `audio_codec_new_i2s_data()`). Inside `audio_codec_if_t`, `hw_base` handles open/close, sample format, register access, order list, and caps; `adc` and `dac` expose direction-specific enable, volume, gain, and mute; optional `hw_proc` creates ALC/DRC/EQ/line/mute hardware audio processing handles.
+`esp_codec_dev` binds one `audio_codec_if_t` and one `audio_codec_data_if_t`. The chip interface is created from chip configuration (for example `es8311_codec_new()` or `audio_codec_new("es8311", &cfg, sizeof(cfg))`). The data interface is created from the bus implementation (for example `audio_codec_new_i2s_data()`). Inside `audio_codec_if_t`, `hw_base` handles open/close, sample format, register access, order list, and caps; `adc` and `dac` expose direction-specific enable, volume, gain, and mute; optional `hw_proc` provides ALC/DRC/EQ/line/mute implementation tables dispatched by `esp_audio_hw_*()`.
 
 ## Directory structure
 
@@ -128,8 +128,8 @@ flowchart TB
 | --- | --- |
 | `include/` | Main public API: `esp_codec_dev.h`, type definitions, volume API, and default configuration (`audio_codec_cfg_t`, `audio_codec_new()`) |
 | `include/impl/` | Extended interfaces: UAC manager and ADC data interface |
-| `include/hw_proc/` | Hardware audio processing API headers (ALC, DRC, EQ, line, mute) |
-| `interface/` | Control, data, GPIO, codec base interfaces, and shared hardware sub-config `audio_codec_hw_cfg.h` |
+| `include/hw_proc/` | Hardware audio processing API headers (`esp_audio_hw_alc.h` and related) |
+| `interface/` | Control, data, GPIO, codec base interfaces, `esp_audio_hw_proc_if.h`, and shared hardware sub-config `audio_codec_hw_cfg.h` |
 | `device/` | Per-chip drivers and `device/include/` chip headers |
 | `platform/` | ESP-IDF platform bindings (I2C, I2S, GPIO, ADC, USB UAC) |
 | `src/` | Core implementation, data layout, software volume, and hw_proc dispatch |
@@ -322,7 +322,6 @@ See [common/my_codec.c](test_apps/codec_dev_test/main/common/my_codec.c) and [de
 * I2S mode (STD, TDM, PDM) is taken from the underlying I2S channel; do not pass mode in `esp_codec_dev_sample_info_t`.
 * Call `esp_codec_dev_open()` before read/write or data layout APIs. Match `dev_type` to the codec direction (IN, OUT, or IN_OUT).
 * Set `adc_cfg.label` at initialization when using label-based data layout on multi-mic boards.
-* Delete hardware audio processing handles before deleting the parent `audio_codec_if_t`.
 * Chip drivers use grouped `codec_cfg` sub-configs; field usage varies by chip. See [docs/features.md](docs/features.md).
 * Do not call the same `audio_codec_data_if_t` handle from multiple tasks concurrently.
 

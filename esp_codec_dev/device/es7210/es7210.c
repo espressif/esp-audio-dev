@@ -118,9 +118,9 @@ static const es7210_coeff_div_t coeff_div[] = {
     {19200000, 96000, 0x01, 0x05, 0x00, 0x01, 0x28, 0x00, 0x00, 0xc8},
 };
 
-static const audio_codec_hw_proc_ops_t hw_proc = {
-    .alc_new = audio_hw_es7210_alc_new,
-    .mute_new = audio_hw_es7210_mute_new,
+static const esp_audio_hw_proc_ops_t hw_proc = {
+    .alc = &es7210_alc_ops,
+    .mute = &es7210_mute_ops,
 };
 
 static const esp_codec_dev_device_map_info_t order_info[] = {

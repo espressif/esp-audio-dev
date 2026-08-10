@@ -116,7 +116,7 @@ v2.0 `audio_codec_if_t` 改为组合式结构：
 - `ctrl_if`
 - `adc_if`
 - `dac_if`
-- `hw_proc`（可选，硬件音频处理工厂入口）
+- `hw_proc`（可选，硬件音频处理实现表入口）
 
 `audio_codec_if.h` 仅声明运行时接口与 `audio_codec_delete_codec_if()`。`audio_codec_new()` 与工厂配置 `audio_codec_cfg_t` 位于 `esp_codec_dev_defaults.h`。共享硬件子配置 `audio_hw_*_cfg_t` 位于 `interface/audio_codec_hw_cfg.h`。ADC/DAC 使能、静音、音量等 helper 属于组件内部封装，应用通常通过 `esp_codec_dev_*` API 间接使用。
 
@@ -188,20 +188,37 @@ v2.0 `audio_codec_if_t` 改为组合式结构：
 
 v2.0 新增以下公开接口头：
 
-- `include/hw_proc/audio_hw_alc.h`（含 `audio_alc_cfg_t`）
-- `include/hw_proc/audio_hw_drc.h`（含 `audio_drc_cfg_t`）
-- `include/hw_proc/audio_hw_eq.h`（含 `audio_eq_cfg_t`）
-- `include/hw_proc/audio_hw_line.h`
-- `include/hw_proc/audio_hw_mute.h`（含 `auto_mute_cfg_t`、`soft_mute_cfg_t`）
+- `include/hw_proc/esp_audio_hw_alc.h`（含 `esp_audio_hw_alc_cfg_t`）
+- `include/hw_proc/esp_audio_hw_drc.h`（含 `esp_audio_hw_drc_cfg_t`）
+- `include/hw_proc/esp_audio_hw_eq.h`（含 `esp_audio_hw_eq_cfg_t`、`esp_audio_hw_eq_para_t`）
+- `include/hw_proc/esp_audio_hw_line.h`
+- `include/hw_proc/esp_audio_hw_mute.h`（含 `esp_audio_hw_auto_mute_cfg_t`、`esp_audio_hw_soft_mute_cfg_t`）
+- `interface/esp_audio_hw_proc_if.h`（驱动侧 vtable：`esp_audio_hw_alc_t` 等与 `esp_audio_hw_proc_ops_t`）
 - `interface/audio_codec_hw_cfg.h`（共享 `audio_hw_*_cfg_t` 子配置）
 
-同时新增统一硬件音频处理构造入口，例如：
+应用通过 `esp_audio_hw_*()` 直接操作 `esp_codec_dev_handle_t`，例如：
 
-- `audio_hw_alc_new()`
-- `audio_hw_mute_new()`
-- `audio_hw_drc_new()`
-- `audio_hw_eq_new()`
-- `audio_hw_line_new()`
+- `esp_audio_hw_alc_init()` / `esp_audio_hw_alc_set_gain()`
+- `esp_audio_hw_drc_init()` / `esp_audio_hw_drc_enable()`
+- `esp_audio_hw_eq_set_cfg()` / `esp_audio_hw_eq_enable()`
+- `esp_audio_hw_line_enable_in()` / `esp_audio_hw_line_enable_out()`
+- `esp_audio_hw_auto_mute_set_cfg()` / `esp_audio_hw_soft_mute_enable()`
+
+不需要再创建或销毁独立的处理句柄；芯片是否支持由 `audio_codec_if_t.hw_proc` 中对应字段决定。驱动作者应 `#include "esp_audio_hw_proc_if.h"` 填表。
+
+命名对照（beta 期间统一到 `esp_audio_hw_` 前缀）：
+
+| 旧名 | 新名 |
+| --- | --- |
+| `audio_hw_alc.h` 等 | `esp_audio_hw_alc.h` 等 |
+| `audio_hw_proc_if.h`（曾在 `include/hw_proc/`） | `interface/esp_audio_hw_proc_if.h` |
+| `audio_alc_cfg_t` / `DEFAULT_ALC_CONFIG()` | `esp_audio_hw_alc_cfg_t` / `ESP_AUDIO_HW_ALC_CFG_DEFAULT()` |
+| `audio_drc_cfg_t` / `DEFAULT_DRC_CONFIG()` | `esp_audio_hw_drc_cfg_t` / `ESP_AUDIO_HW_DRC_CFG_DEFAULT()` |
+| `audio_eq_cfg_t` / `eq_para_t` | `esp_audio_hw_eq_cfg_t` / `esp_audio_hw_eq_para_t` |
+| `auto_mute_cfg_t` / `DEFAULT_AUTO_MUTE_CONFIG()` | `esp_audio_hw_auto_mute_cfg_t` / `ESP_AUDIO_HW_AUTO_MUTE_CFG_DEFAULT()` |
+| `soft_mute_cfg_t` / `DEFAULT_SOFT_MUTE_CONFIG()` | `esp_audio_hw_soft_mute_cfg_t` / `ESP_AUDIO_HW_SOFT_MUTE_CFG_DEFAULT()` |
+| `ALC_NOISE_GATE_*` / `alc_noise_gate_mode_t` | `ESP_AUDIO_HW_ALC_NOISE_GATE_*` / `esp_audio_hw_alc_noise_gate_mode_t` |
+| `audio_hw_alc_t` 等 / `audio_codec_hw_proc_ops_t` | `esp_audio_hw_alc_t` 等 / `esp_audio_hw_proc_ops_t` |
 
 可选能力：启用 `CONFIG_CODEC_UAC_SUPPORT` 后可通过 `include/impl/esp_codec_dev_uac.h` 使用 USB UAC 设备接口。
 

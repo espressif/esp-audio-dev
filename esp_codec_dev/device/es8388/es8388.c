@@ -44,9 +44,9 @@ static const esp_codec_dev_vol_range_t vol_range = {
     },
 };
 
-static const audio_codec_hw_proc_ops_t hw_proc = {
-    .alc_new = audio_hw_es8388_alc_new,
-    .line_new = audio_hw_es8388_line_new,
+static const esp_audio_hw_proc_ops_t hw_proc = {
+    .alc = &es8388_alc_ops,
+    .line = &es8388_line_ops,
 };
 
 static const esp_codec_dev_device_map_info_t order_info[] = {
