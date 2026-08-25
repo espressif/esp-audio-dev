@@ -30,6 +30,7 @@ set(srcs
         "app/test_app_main.c"
         "mock/test_my_codec.c"
         "mock/test_layout_mock.c"
+        "mock/test_adc_label.c"
         "common/test_board_periph.c"
         "mock/test_codec_print.c"
         "common/my_codec.c"

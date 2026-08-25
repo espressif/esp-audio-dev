@@ -66,6 +66,8 @@
 | `ESP_CODEC_DEV_WORK_MODE_*` / `esp_codec_dec_work_mode_t` | 已删除 | 方向改由 `esp_codec_dev_cfg_t.dev_type` 与运行时 enable/open 决定 |
 | `include/esp_codec_adc.h` | `include/impl/esp_codec_adc_data.h` | 头文件改名；通过 `esp_codec_dev_defaults.h` 间接包含时为 `esp_codec_adc_data.h` |
 | `include/esp_codec_dev_os.h` | `include/impl/esp_codec_dev_os.h` | 移至 impl，默认不作为应用侧公开路径 |
+| `device/private_inc/codec_ref_mgr.h` | `include/codec/audio_codec_ctrl_ref.h` | Codec 驱动按 ctrl 身份共享芯片；`audio_codec_ctrl_ref_acquire/release` |
+| — | `include/codec/audio_codec_adc_label.h` | Codec 驱动用 `audio_codec_adc_label_parse()` 把 `adc_cfg.label` 转成硬件 MIC mask |
 
 ### 2.3 `esp_codec_dev_types.h` 扩展了 layout/channel map 类型
 
@@ -360,20 +362,18 @@ v2.0 字段：
 | --- | --- | --- |
 | `master_mode` | `sys_cfg.is_master` | 语义基本等价 |
 | `mclk_div` | `esp_codec_dev_sample_info_t.mclk_multiple` | 从构造参数迁到流参数 |
-| `mic_selected` | `esp_codec_dev_sample_info_t.channel_mask` | 从静态 MIC 选择改为流打开时选择通道 |
+| `mic_selected` | `adc_cfg.label` | 硬件 MIC 使能改由 ADC label 决定；`NA` 表示该槽不使能，空 label 使能全部物理通道 |
 | `mclk_src` | 无 | v2.0 实现固定使用 PAD 作为内部 MCLK 来源 |
 
 ### 语义变化
 
-1. `ES7210` v2.0 实现固定走 TDM 路径  
+1. `ES7210` v2.0 实现固定走 TDM 路径
 打开时直接写 `ES7210_SDP_INTERFACE2_REG12 = 0x02`，并输出 `Enable TDM mode` 日志，不再根据选中 MIC 数量动态切换 STD/TDM。
 
-2. MIC 选择从构造时静态配置改成 `fs->channel_mask`  
-v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enable 路径应用到硬件：
-   - `channel_mask == 0` 时默认选 MIC1 + MIC2
-   - `channel == 4` 时强制使用 `0x0F`
+2. 硬件 MIC 使能由 `adc_cfg.label` 决定
+驱动通过 `audio_codec_adc_label_parse()` 把 label 转成 MIC mask 和 `channel_num`（含 `NA` 的 token 数）。允许的 token 仅为 `FC`/`RE`/`FL`/`FR`/`SL`/`SR`/`BL`/`BR`/`NA`（精确匹配、区分大小写）；其它字符串视为非法。空 label 使能全部物理通道且 `channel_num` 为 0；I2S 读哪些槽仍由 `fs->channel_mask` 决定。
 
-3. `mclk_div` 迁移到 `fs->mclk_multiple`  
+3. `mclk_div` 迁移到 `fs->mclk_multiple`
 旧版是 codec 固定配置；v2.0 按每次 open/set_fs 的流参数决定。
 
 4. 新增了 `adc_cfg`，但 v2.0 实现目前主要验证 `adc_cfg.label`，尚未测试 `adc_cfg.digital_mic`。
@@ -423,7 +423,8 @@ v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enabl
 
 - 把 `master_mode` 迁到 `sys_cfg.is_master`
 - 删除 `mic_selected/mclk_src/mclk_div`
-- 在 `esp_codec_dev_open()` 的 `fs` 中通过 `channel_mask` 和 `mclk_multiple` 控制实际采集通道与时钟倍率
+- 用 `adc_cfg.label` 声明硬件 MIC 使能（需要时调用 `audio_codec_adc_label_parse()`）
+- 在 `esp_codec_dev_open()` 的 `fs` 中通过 `channel_mask` 和 `mclk_multiple` 控制 I2S 采集槽位与时钟倍率
 
 3. 若使用 `CJC8910` 或其他已迁到子配置的驱动
 
@@ -527,6 +528,7 @@ es7210_codec_cfg_t cfg = {
     },
     .adc_cfg = {
         .digital_mic = false,
+        .label = "FL,FR",
     },
 };
 

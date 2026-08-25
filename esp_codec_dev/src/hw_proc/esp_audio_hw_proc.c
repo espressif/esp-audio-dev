@@ -28,7 +28,7 @@ static esp_codec_dev_mutex_handle_t esp_audio_hw_proc_get_mutex(void)
         return NULL;
     }
 
-    /* Same pattern as codec_ref_mgr: CAS for concurrent first create */
+    /* Same pattern as audio_codec_ctrl_ref: CAS for concurrent first create */
     if (esp_cpu_compare_and_set((volatile uint32_t *)&s_esp_audio_hw_proc_mutex,
                                 (uint32_t)NULL,
                                 (uint32_t)mutex)) {

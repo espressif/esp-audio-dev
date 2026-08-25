@@ -13,7 +13,7 @@
 #include "es8388_codec.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
-#include "codec_ref_mgr.h"
+#include "audio_codec_ctrl_ref.h"
 #include "esp_codec_dev_vol.h"
 #include "es8388_proc_priv.h"
 
@@ -454,7 +454,7 @@ static int es8388_close(const audio_hw_base_t *h)
     if (codec->is_open) {
         audio_codec_ctrl_info_t ctrl_info = {0};
         codec->cfg.ctrl_if->get_info(codec->cfg.ctrl_if, &ctrl_info);
-        int ref_count = codec_ref_release(&ctrl_info);
+        int ref_count = audio_codec_ctrl_ref_release(&ctrl_info);
         if (ref_count < 0) {
             ESP_LOGE(TAG, "Failed to release codec device open reference");
             return ESP_CODEC_DEV_WRITE_FAIL;
@@ -591,7 +591,7 @@ const audio_codec_if_t *es8388_codec_new(es8388_codec_cfg_t *codec_cfg)
 
     codec->hw_gain = esp_codec_dev_vol_calc_hw_gain(&codec_cfg->pa_cfg.hw_gain);
     do {
-        int ref_count = codec_ref_acquire(&ctrl_info);
+        int ref_count = audio_codec_ctrl_ref_acquire(&ctrl_info);
         if (ref_count < 0) {
             ESP_LOGE(TAG, "Failed to acquire codec device open reference");
             break;
@@ -602,7 +602,7 @@ const audio_codec_if_t *es8388_codec_new(es8388_codec_cfg_t *codec_cfg)
             int ret = codec->base.hw_base.open(&codec->base.hw_base, &codec->cfg, sizeof(es8388_codec_cfg_t));
             if (ret != 0) {
                 ESP_LOGE(TAG, "Open fail, ret: %d", ret);
-                codec_ref_release(&ctrl_info);
+                audio_codec_ctrl_ref_release(&ctrl_info);
                 break;
             }
         } else {

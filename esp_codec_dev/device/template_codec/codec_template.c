@@ -30,9 +30,9 @@ static const char *TAG = "CHIP";
  *     base + adc_ops + dac_ops + cfg + open/enable state
  * - For ADC-only codecs, remove dac_ops / dac_enabled / DAC callbacks.
  * - For DAC-only codecs, remove adc_ops / adc_enabled / ADC callbacks.
- * - If multiple logical instances can share one physical chip, copy the reference
- *   counting pattern from es8311/es8389 (codec_ref_helper). Do not add ref_mgr
- *   statistics to this template; that helper API may change.
+ * - If multiple logical instances can share one physical chip, use
+ *   audio_codec_ctrl_ref_acquire/release from audio_codec_ctrl_ref.h
+ *   (same pattern as es8311/es8389).
  *
  * File layout before functions (optional blocks may be removed):
  *   instance struct -> coeff_div -> vol_range -> hw_proc ->
@@ -72,7 +72,7 @@ typedef struct {
     bool               adc_enabled;                            /*!< True when ADC path is running */
     bool               dac_enabled;                            /*!< True when DAC path is running */
     float              hw_gain;                                /*!< Cached hardware gain in dB */
-    char               adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< Optional, for get_adc_label */
+    char               adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< Optional, for get_adc_label and mic_select ("NA" unused) */
 } audio_codec_chip_t;
 
 /**
@@ -669,7 +669,11 @@ static int chip_pa_enable(const audio_codec_if_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-/* Optional: remove when adc_cfg.label is not used */
+/* Optional: remove when adc_cfg.label is not used.
+ * label is both the board channel name list and mic_select: token "NA" means
+ * that physical channel is unused; a NULL or empty label enables all channels.
+ * Duplicate names are allowed. Codec drivers parse label with
+ * audio_codec_adc_label_parse(). */
 static void chip_save_adc_label(audio_codec_chip_t *codec, const char *label)
 {
     codec->adc_label[0] = '\0';

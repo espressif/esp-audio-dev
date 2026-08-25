@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
-#include "codec_ref_mgr.h"
+#include "audio_codec_ctrl_ref.h"
 
 #include "es8389_reg.h"
 #include "es8389_codec.h"
@@ -638,7 +638,7 @@ static int es8389_config_sample(audio_codec_es8389_t *codec, int sample_rate, in
 {
     int ret = ESP_CODEC_DEV_OK;
 
-    int mclk_fre = sample_rate * bits * (codec->dac_ref_enabled ? 4 : 2);
+    int mclk_fre = sample_rate * bits * 4;
     int rate = mclk_fre / sample_rate;
 
     int coeff = get_coeff(mclk_fre, rate);
@@ -823,7 +823,7 @@ static int es8389_close(const audio_hw_base_t *h)
     if (codec->is_open) {
         audio_codec_ctrl_info_t ctrl_info = {0};
         codec->cfg.ctrl_if->get_info(codec->cfg.ctrl_if, &ctrl_info);
-        int ref_count = codec_ref_release(&ctrl_info);
+        int ref_count = audio_codec_ctrl_ref_release(&ctrl_info);
         if (ref_count < 0) {
             return ESP_CODEC_DEV_WRITE_FAIL;
         }
@@ -1005,7 +1005,7 @@ const audio_codec_if_t *es8389_codec_new(es8389_codec_cfg_t *codec_cfg)
 
     codec->hw_gain = esp_codec_dev_vol_calc_hw_gain(&codec_cfg->pa_cfg.hw_gain);
     do {
-        int ref_count = codec_ref_acquire(&ctrl_info);
+        int ref_count = audio_codec_ctrl_ref_acquire(&ctrl_info);
         if (ref_count < 0) {
             ESP_LOGE(TAG, "Failed to acquire codec device open reference");
             break;
@@ -1016,7 +1016,7 @@ const audio_codec_if_t *es8389_codec_new(es8389_codec_cfg_t *codec_cfg)
             int ret = codec->base.hw_base.open(&codec->base.hw_base, &codec->cfg, sizeof(es8389_codec_cfg_t));
             if (ret != 0) {
                 ESP_LOGE(TAG, "Open fail, ret: %d", ret);
-                codec_ref_release(&ctrl_info);
+                audio_codec_ctrl_ref_release(&ctrl_info);
                 break;
             }
         } else {

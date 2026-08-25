@@ -9,10 +9,16 @@
 
 #include "esp_log.h"
 
+#include "audio_codec_adc_label.h"
 #include "codec_dev_order.h"
 
 #define CODEC_DEV_ORDER_MAX_LABEL_COUNT  (8)
 #define CODEC_DEV_ORDER_MAX_LABEL_LEN    (16)
+#define CODEC_DEV_ADC_LABEL_UNUSED       "NA"
+
+static const char *const s_adc_label_tokens[] = {
+    "FC", "RE", "FL", "FR", "SL", "SR", "BL", "BR", CODEC_DEV_ADC_LABEL_UNUSED,
+};
 
 static const char *TAG = "ADEV_LAYOUT";
 
@@ -52,11 +58,6 @@ static bool parse_label_list(const char *label, codec_label_list_t *list)
         if (token_len <= 0 || token_len >= CODEC_DEV_ORDER_MAX_LABEL_LEN) {
             return false;
         }
-        for (int i = 0; i < list->count; i++) {
-            if (strlen(list->label[i]) == token_len && strncmp(list->label[i], token_start, token_len) == 0) {
-                return false;
-            }
-        }
         memcpy(list->label[list->count], token_start, token_len);
         list->label[list->count][token_len] = '\0';
         list->count++;
@@ -68,17 +69,63 @@ static bool parse_label_list(const char *label, codec_label_list_t *list)
     return list->count > 0;
 }
 
-static int find_label_index(const codec_label_list_t *list, const char *label)
+static bool adc_label_token_is_supported(const char *token)
+{
+    if (token == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(s_adc_label_tokens) / sizeof(s_adc_label_tokens[0]); i++) {
+        if (strcmp(token, s_adc_label_tokens[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int find_unused_label_index(const codec_label_list_t *list, const char *label, uint16_t used)
 {
     if (list == NULL || label == NULL) {
         return -1;
     }
     for (int i = 0; i < list->count; i++) {
-        if (strcmp(list->label[i], label) == 0) {
+        if ((used & (uint16_t)(1U << i)) == 0 && strcmp(list->label[i], label) == 0) {
             return i;
         }
     }
     return -1;
+}
+
+int audio_codec_adc_label_parse(const char *label, uint16_t *mic_mask, uint8_t *channel_num)
+{
+    if (mic_mask == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    *mic_mask = 0;
+    if (channel_num != NULL) {
+        *channel_num = 0;
+    }
+    if (label == NULL || label[0] == '\0') {
+        *mic_mask = UINT16_MAX;
+        return ESP_CODEC_DEV_OK;
+    }
+    codec_label_list_t list = {0};
+    if (parse_label_list(label, &list) == false) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    for (int i = 0; i < list.count; i++) {
+        if (adc_label_token_is_supported(list.label[i]) == false) {
+            ESP_LOGE(TAG, "Unsupported ADC label token: %s", list.label[i]);
+            *mic_mask = 0;
+            return ESP_CODEC_DEV_INVALID_ARG;
+        }
+        if (strcmp(list.label[i], CODEC_DEV_ADC_LABEL_UNUSED) != 0) {
+            *mic_mask |= (uint16_t)(1U << i);
+        }
+    }
+    if (channel_num != NULL) {
+        *channel_num = list.count;
+    }
+    return ESP_CODEC_DEV_OK;
 }
 
 bool codec_dev_order_is_valid(const esp_codec_dev_channel_map_t *map)
@@ -142,12 +189,14 @@ int codec_dev_order_from_labels(const char *board_labels, const char *requested_
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     map->value = 0;
+    uint16_t used = 0;
     for (int mem_pos = 0; mem_pos < requested.count; mem_pos++) {
-        int label_idx = find_label_index(&board, requested.label[mem_pos]);
+        int label_idx = find_unused_label_index(&board, requested.label[mem_pos], used);
         if (label_idx < 0) {
             ESP_LOGE(TAG, "Invalid label: %s, board count: %d", requested.label[mem_pos], board.count);
             return ESP_CODEC_DEV_INVALID_ARG;
         }
+        used |= (uint16_t)(1U << label_idx);
         codec_dev_channel_map_set_slot(map, (uint8_t)(mem_pos + 1), (uint8_t)(label_idx + 1));
     }
     return codec_dev_order_is_valid(map) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_INVALID_ARG;

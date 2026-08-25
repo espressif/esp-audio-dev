@@ -124,9 +124,11 @@ int esp_codec_dev_get_data_layout(esp_codec_dev_handle_t codec, esp_codec_dev_ch
 /**
  * @brief  Set codec memory data layout by ADC channel labels
  *
- * @note  This API uses the ADC channel labels configured at codec initialization
- *        (adc_cfg.label) to translate labels into a memory data layout. It is only supported
- *        for capture devices that provide ADC labels. It does not modify the codec ADC label
+ * @note  Duplicate names are allowed. Each requested token binds the next unused
+ *        matching board channel (left to right). This API uses the ADC channel
+ *        labels configured at codec initialization (adc_cfg.label) to translate
+ *        labels into a memory data layout. It is only supported for capture
+ *        devices that provide ADC labels. It does not modify the codec ADC label
  *        configuration. Output-only devices return ESP_CODEC_DEV_NOT_SUPPORT.
  *
  * @param[in]  codec  Codec device handle

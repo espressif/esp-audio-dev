@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Feature
+
+- Added `audio_codec_adc_label_parse()` to convert `adc_cfg.label` into a hardware MIC mask (LSB→MSB; bit i is set unless token i is `NA`) and an output `channel_num` (token count including `NA`). Allowed tokens are `FC`, `RE`, `FL`, `FR`, `SL`, `SR`, `BL`, `BR`, and `NA` (exact, case-sensitive). Duplicates are allowed; empty tokens such as `"FL,,RE"` and unknown tokens such as `"na"` or `"N/A"` are invalid; `NULL` or `""` yields mask `0xFFFF` and `channel_num` 0. Codecs can use the label to select which microphone channels are enabled.
+- Added `audio_codec_ctrl_ref_acquire()` / `audio_codec_ctrl_ref_release()` so IN/OUT instances can share one control interface. Acquire returning `1` means first user (open hardware); release returning `0` means last user (close).
+
 ## v2.0.0-beta3
 
 ### Breaking Change

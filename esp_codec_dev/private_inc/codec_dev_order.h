@@ -121,6 +121,9 @@ bool codec_dev_order_contains(const esp_codec_dev_channel_map_t *superset_map,
 /**
  * @brief  Convert requested channel labels to a memory channel map
  *
+ * @note  Duplicate names are allowed. Each requested token binds the next unused
+ *        matching board channel (left to right).
+ *
  * @param[in]   board_labels      Board channel label list
  * @param[in]   requested_labels  Requested channel label list
  * @param[out]  map               Converted channel map
