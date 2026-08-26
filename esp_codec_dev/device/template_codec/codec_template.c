@@ -25,7 +25,10 @@ static const char *TAG = "CHIP";
  *   a new codec driver under the audio_codec_if_t framework.
  * - Symbol prefix chip_ and TAG "CHIP" apply to functions, types, and public
  *   symbols (for example ES8311, ES8389). File-scope static tables use short
- *   names: coeff_div, vol_range, hw_proc, order_info, codec_caps.
+ *   names: coeff_div, vol_range, hw_proc, order_info, cap_bits, cap_rates.
+ * - order_info is frame geometry for get_order_list: each row's channels is the
+ *   frame slot count, and map is a dense permutation of 1..channels with no
+ *   zero holes. Physical converter count comes only from get_caps.
  * - The default shape follows a full-duplex codec like ES8311:
  *     base + adc_ops + dac_ops + cfg + open/enable state
  * - For ADC-only codecs, remove dac_ops / dac_enabled / DAC callbacks.
@@ -36,7 +39,7 @@ static const char *TAG = "CHIP";
  *
  * File layout before functions (optional blocks may be removed):
  *   instance struct -> coeff_div -> vol_range -> hw_proc ->
- *   order_info -> codec_caps.
+ *   order_info -> cap_bits / cap_rates.
  *
  * Function order in this file (match chip_codec_new() vtable assignment):
  * 1. Internal helpers (static, audio_codec_chip_t * where possible):
@@ -118,23 +121,17 @@ static const esp_audio_hw_proc_ops_t hw_proc = {
     .mute = NULL,
 };
 
+/* Frame geometry for get_order_list. channels is frame slot count; map is a
+ * dense 1..N permutation. Add TDM 4/6/8 rows for mapping-aware widening. */
 static const esp_codec_dev_device_map_info_t order_info[] = {
-    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
+    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
 };
 
-/* Optional: remove when get_caps is not implemented */
-static const esp_codec_dev_capability_t codec_caps = {
-    .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
-    .flexible = {
-        .max_channels = 2,
-        .bits_per_sample = (const uint8_t[]){ 16, 24, 32 },
-        .bits_num = 3,
-        .sample_rates = (const uint32_t[]){
-            8000, 16000, 32000, 44100, 48000,
-        },
-        .sample_rate_num = 5,
-    },
+static const uint8_t chip_cap_bits[] = {16, 24, 32};
+
+static const uint32_t chip_cap_rates[] = {
+    8000, 16000, 32000, 44100, 48000,
 };
 
 static int chip_check_codec(const audio_codec_chip_t *codec)
@@ -527,6 +524,8 @@ static int chip_get_order_list(const audio_hw_base_t *h,
                                const esp_codec_dev_device_map_info_t **order_list,
                                int *list_size)
 {
+    /* Returns frame-geometry rows only. Add TDM 4/6/8-slot dense maps when the
+     * chip supports mapping-aware full-duplex widening. */
     audio_codec_chip_t *codec = (audio_codec_chip_t *)h;
     if (codec == NULL || order_list == NULL || list_size == NULL) {
         return ESP_CODEC_DEV_INVALID_ARG;
@@ -546,7 +545,10 @@ static int chip_get_adc_label(const audio_hw_base_t *h, const char **label)
     return ESP_CODEC_DEV_OK;
 }
 
-/* Optional: remove when capability query is not needed */
+/* Optional: remove when capability query is not needed.
+ * max_channels / fixed.channel is the physical converter count.
+ * Do not infer converter count from order_info[].channels.
+ * Capability structs are built on the stack; bits/rates stay file-static. */
 static int chip_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
                          esp_codec_dev_capability_t *caps, int *count)
 {
@@ -559,6 +561,16 @@ static int chip_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type
         *count = 1;
         return ESP_CODEC_DEV_OK;
     }
+    const esp_codec_dev_capability_t codec_caps = {
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,
+            .bits_per_sample = chip_cap_bits,
+            .bits_num = sizeof(chip_cap_bits) / sizeof(chip_cap_bits[0]),
+            .sample_rates = chip_cap_rates,
+            .sample_rate_num = sizeof(chip_cap_rates) / sizeof(chip_cap_rates[0]),
+        },
+    };
     caps[0] = codec_caps;
     caps[0].dev_type = dev_type;
     *count = 1;

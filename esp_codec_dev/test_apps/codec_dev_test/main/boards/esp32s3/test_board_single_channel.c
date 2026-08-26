@@ -215,7 +215,7 @@ static void test_codec_dev_using_s3_board_phased_init(void)
     int got_size = 0;
 
     esp_codec_dev_channel_map_t order = {
-        .value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0),
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4),
     };
     esp_codec_dev_set_data_layout(play_inst.codec_dev, &order);
 

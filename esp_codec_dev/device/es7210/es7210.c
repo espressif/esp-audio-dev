@@ -124,25 +124,21 @@ static const esp_audio_hw_proc_ops_t hw_proc = {
     .mute = &es7210_mute_ops,
 };
 
+/* TDM frames group the odd channels ahead of the even ones, whatever the frame is wide. Rows past
+   four slots describe where the channels sit in that frame, not extra microphones. */
 static const esp_codec_dev_device_map_info_t order_info[] = {
-    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0)}},
+    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
-static const esp_codec_dev_capability_t adc_caps = {
-    .dev_type = ESP_CODEC_DEV_TYPE_IN,
-    .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
-    .flexible = {
-        .max_channels = 4,
-        .bits_per_sample = (const uint8_t[]){ 16, 24, 32 },
-        .bits_num = 3,
-        .sample_rates = (const uint32_t[]){
-            8000, 11025, 12000, 16000, 22050, 24000,
-            32000, 44100, 48000, 64000, 88200, 96000,
-        },
-        .sample_rate_num = 12,
-    },
+static const uint8_t es7210_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es7210_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000,
+    32000, 44100, 48000, 64000, 88200, 96000,
 };
 
 static int es7210_write_reg(audio_codec_es7210_t *codec, int reg, int value)
@@ -249,8 +245,8 @@ static int es7210_select_mics(audio_codec_es7210_t *codec, uint16_t channel_mask
             ret |= es7210_update_reg_bit(codec, ES7210_MIC4_GAIN_REG46, 0x10, 0x10);
         }
     } else {
-        ESP_LOGE(TAG, "Microphone selection error");
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "Channel mask 0x%x selects no microphone", channel_mask);
+        return ESP_CODEC_DEV_NOT_SUPPORT;
     }
 
     return (ret == ESP_CODEC_DEV_OK) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
@@ -645,6 +641,17 @@ static int es7210_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         *count = 1;
         return ESP_CODEC_DEV_OK;
     }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 4,
+            .bits_per_sample = es7210_cap_bits,
+            .bits_num = sizeof(es7210_cap_bits) / sizeof(es7210_cap_bits[0]),
+            .sample_rates = es7210_cap_rates,
+            .sample_rate_num = sizeof(es7210_cap_rates) / sizeof(es7210_cap_rates[0]),
+        },
+    };
     caps[0] = adc_caps;
     *count = 1;
     return ESP_CODEC_DEV_OK;

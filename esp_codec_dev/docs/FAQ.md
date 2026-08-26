@@ -21,21 +21,21 @@
 
 ---
 
-## 1. `esp_codec_dev_open` 失败或参数被改得很奇怪
+## 1. `esp_codec_dev_open` 失败或日志里的格式与传入 `fs` 不一致
 
-**现象**：日志里出现 `Not support sample_rate`、`Not support bits_per_sample`，或 `channel`、`channel_mask`、`mclk_multiple` 被改掉。
+**现象**：日志里出现 `Not support sample_rate`、`Not support bits_per_sample`，或打开成功后日志中的 `channel_mask` / `mclk_multiple` 与传入结构体不同。
 
 **原因与处理**：
 
+- `esp_codec_dev_open()` 把 `fs` 当作只读输入，**不会回写**调用方结构体。
 - `sample_rate` 仅支持 **8000～192000 Hz**。
 - `bits_per_sample` 仅支持 **8 / 16 / 24 / 32**。
-- `channel == 0` 会默认改为 **2**。
-- **奇数 `channel`** 会 **+1 变为偶数**；如果未显式设置 `channel_mask`，会先使用默认 mask，再按最终通道数解释有效 slot。
-- `mclk_multiple == 0` 会改为 **256**。
-- `channel_mask == 0` 会使用默认 mask，常规多通道场景下等价于从低位开始启用 `channel` 个 slot。
-- **24 bit** 时若 `mclk_multiple` 不是 3 的倍数，会改为 **384**（与 I2S MCLK 约束一致）。
+- `channel == 0` 或超出总线槽位数会失败。
+- `mclk_multiple == 0` 时内部使用 **256**。
+- `channel_mask == 0` 时内部使用默认 mask，常规多通道场景下等价于从低位开始启用 `channel` 个 slot。
+- **24 bit** 时若 `mclk_multiple` 不是 3 的倍数，内部改为 **384**（与 I2S MCLK 约束一致）。
 
-若业务必须奇数路或非常规格式，需在调用 `open` 前自行规划为合法组合，或扩展芯片侧驱动说明。
+若业务必须非常规格式，需在调用 `open` 前自行规划为合法组合，或扩展芯片侧驱动说明。
 
 ---
 
@@ -45,7 +45,7 @@
 
 **原因**：同一 I2S 端口的 TX/RX 共享时钟，组件要求当前端与配对端的 **`sample_rate`、`mclk_multiple` 一致**。
 
-**处理**：保证 TX/RX 使用相同的采样率与 MCLK 倍数；若一端在 `open` 时被调整了 `mclk_multiple`，另一端也应保持一致。
+**处理**：保证 TX/RX 使用相同的采样率与 MCLK 倍数；若一端传入 `mclk_multiple == 0` 或 24 bit 时被内部调整，另一端应显式传入相同的生效倍数，不能依赖 `open` 回写。
 
 I2S 全双工时钟关系见 [ESP32 I2S 基础行为](./i2s_driver/esp32_i2s_driver.md)。
 
@@ -68,7 +68,7 @@ I2S 全双工时钟关系见 [ESP32 I2S 基础行为](./i2s_driver/esp32_i2s_dri
 **常见原因**：
 
 - **未在 `esp_codec_dev_open` 之后**调用 `set_data_layout`（会返回 `ESP_CODEC_DEV_WRONG_STATE`）。
-- **`esp_codec_dev_channel_map_t` 非法**：非法 slot、重复 slot、slot 超过 8，或公开 API 要求的非零 slot 不连续等（见 `src/codec_dev_order.c` / `src/esp_codec_dev.c` 校验）。
+- **`esp_codec_dev_channel_map_t` 非法**：非法 slot、重复 slot、slot 超过 8，或公开 API 要求的非零 slot 不连续等（见 `src/codec_dev_map.c` / `src/esp_codec_dev.c` 校验）。
 - 期望 map 与 **当前 Layer1+Layer2 合成 map** 无子集关系，无法仅用 mask/软件路径满足。
 - `data_if->get_mode` 失败，无法得到 `esp_codec_dev_i2s_mode_t`。
 
@@ -208,7 +208,7 @@ I2S 全双工时钟关系见 [ESP32 I2S 基础行为](./i2s_driver/esp32_i2s_dri
 
 ### 17.3 建议的排查顺序（播放路径）
 
-1. **确认格式**：`esp_codec_dev_open` 后打印最终 `fs`（含组件校验后调整的字段），并与音源 **采样率、声道数、位深** 一致。
+1. **确认格式**：对照 `esp_codec_dev_open` 日志中的生效格式（`channel_mask` / `mclk_multiple` 等可能已在内部补全），并与音源 **采样率、声道数、位深** 一致。调用方传入的 `fs` 不会被改写。
 2. **确认 I2S 与芯片角色**：日志中 **Master/Slave** 与硬件接线（谁出 BCLK/WS/MCLK）一致，参见 [ESP32 I2S 基础行为](./i2s_driver/esp32_i2s_driver.md)。
 3. **确认通道序**：若多声道或 TDM，按 **L1→L2→L3** 对照 [内存中的数据排布](./data_layout/memory_data_layout.md)。
 4. **仍异常**：导出 **短 PCM** 与金样对比，或示波器看 **I2S 数据线** 是否有数据；再区分软件填充问题与模拟链路问题。

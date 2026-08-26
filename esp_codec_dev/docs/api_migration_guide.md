@@ -76,10 +76,9 @@
 - `esp_codec_dev_i2s_mode_t`
 - `esp_codec_dev_channel_map_t`（内存位置 → slot/通道 ID）
 - `esp_codec_dev_device_map_info_t`
-- `esp_codec_dev_data_map_info_t`
 - `esp_codec_dev_caps_mode_t` / `esp_codec_dev_capability_t`
 
-请使用 `ESP_CODEC_DEV_CHANNEL_MAP(...)` 构造 channel map，并通过 `.value` 读写打包值。
+请使用 `ESP_CODEC_DEV_CHANNEL_MAP(...)` 或 `ESP_CODEC_DEV_CHANNEL_MAP_NCH(...)` 构造 channel map，并通过 `.value` 读写打包值。
 
 其他说明：
 
@@ -128,20 +127,19 @@ v2.0 `audio_codec_if_t` 改为组合式结构：
 - 对 `esp_codec_dev` 上层使用者来说，若只通过 `esp_codec_dev_*` API 操作，影响相对较小；若直接操作底层 codec interface，则需要按新模型适配
 - 若代码仅 `#include "audio_codec_if.h"` 后使用 `audio_codec_cfg_t` / `audio_codec_new()`，需改为包含 `esp_codec_dev_defaults.h`；仅使用 `audio_hw_*_cfg_t` 时包含 `audio_codec_hw_cfg.h`（芯片头会间接包含）
 
-### 2.6 `audio_codec_data_if.h` 新增 order/mode/fmt 查询钩子
+### 2.6 `audio_codec_data_if.h` 新增 mode/fmt 查询钩子
 
 相对旧版，新增回调：
 
 - `get_mode`
 - `get_fmt`
-- `get_order`
-- `get_channel_mask`
 
 目的：
 
 - 让 data interface 报告输入/输出 I2S mode
 - 让 data interface 报告当前已打开的流格式（`get_fmt`）
-- 让 data interface 根据 `channel` / `channel_mask` 计算内存位置→slot map，并支持从 map 反解 channel mask
+
+`channel` / `channel_mask` 到内存位置→slot map 的换算由组件内部完成，自定义 data interface 不需要实现 order/mask 计算钩子。
 
 这是 `esp_codec_dev_set_data_layout()`、`esp_codec_dev_get_data_layout()` 以及 label 相关接口能工作的关键前提之一。
 
@@ -407,7 +405,7 @@ v2.0 字段：
 - `mclk_multiple` 是否替代了原先写在 `codec_cfg` 里的 `mclk_div`
 - 是否调用了已重命名的 `esp_codec_set_disable_when_closed` / `esp_codec_dev_col_calc_hw_gain`
 - I2C 是否已改为传入 `bus_handle`（不再使用 `port`）
-- 自定义 data interface 是否实现了 `get_mode()` / `get_fmt()` / `get_order()`，以便 layout/order 能从底层总线获取实际状态
+- 自定义 data interface 是否实现了 `get_mode()` / `get_fmt()`，以便 layout/order 能从底层总线获取实际状态
 
 ### 4.2 直接实例化 codec 驱动的项目
 
@@ -438,8 +436,6 @@ v2.0 字段：
 - `audio_codec_ctrl_if_t.get_info`（且 I2C 信息使用 `bus_handle`）
 - `audio_codec_data_if_t.get_mode`
 - `audio_codec_data_if_t.get_fmt`
-- `audio_codec_data_if_t.get_order`
-- `audio_codec_data_if_t.get_channel_mask`
 - `audio_hw_base_t.get_order_list`
 
 如果这些接口不实现：

@@ -1,10 +1,12 @@
-set(COMPONENT_PRIV_INCLUDEDIRS "private_inc" "device/private_inc" "platform/usb/private_inc")
+set(COMPONENT_PRIV_INCLUDEDIRS "private_inc" "device/private_inc" "platform/i2s" "platform/usb/private_inc")
 
 set(COMPONENT_ADD_INCLUDEDIRS include interface device/include include/codec include/hw_proc include/impl)
 
 # set conversion sources
 set(COMPONENT_SRCS
-  src/codec_dev_order.c
+  src/codec_dev_map.c
+  src/codec_dev_layout.c
+  src/codec_dev_i2s_bus.c
   src/codec_dev_data_cvt.c
   src/codec_dev_mirror.c
   src/audio_codec_if_delete.c
@@ -44,6 +46,9 @@ list(APPEND COMPONENT_SRCS
   platform/audio_codec_gpio.c
   platform/audio_codec_ctrl_i2c.c
   platform/audio_codec_data_i2s.c
+  platform/i2s/audio_codec_data_i2s_hw.c
+  platform/i2s/audio_codec_data_i2s_port.c
+  platform/i2s/audio_codec_data_i2s_reconfig.c
   platform/audio_codec_ctrl_spi.c
   platform/esp_codec_dev_os.c
   device/template_codec/codec_template.c

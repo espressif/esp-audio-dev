@@ -10,77 +10,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_bit_defs.h"
 #include "esp_log.h"
 
 #include "esp_codec_dev.h"
 #include "audio_codec_if.h"
 #include "audio_codec_data_if.h"
 #include "audio_codec_sw_vol.h"
-#include "codec_dev_order.h"
-#include "codec_dev_data_cvt.h"
+#include "codec_dev_map.h"
 #include "codec_dev_mirror.h"
+#include "codec_dev_priv.h"
+#include "codec_dev_layout.h"
 #include "audio_codec_hw_proc.h"
+#include "audio_hw_base_priv.h"
+
+#define VOL_TRANSITION_TIME             (50)
+#define ESP_CODEC_DEV_ALL_CHANNEL_MASK  (0x0F)
 
 static const char *TAG = "ADEV_CODEC";
-
-#define VOL_TRANSITION_TIME              (50)
-#define ESP_CODEC_DEV_ALL_CHANNEL_MASK   (0x0F)
-#define ESP_CODEC_DEV_STD_4CH_ORDER      (ESP_CODEC_DEV_CHANNEL_MAP(3, 1, 4, 2, 0, 0, 0, 0))
-#define ESP_CODEC_DEV_MAX_ORDER_CHANNEL  (8)
-
-typedef struct {
-    const audio_codec_if_t      *codec_if;
-    const audio_codec_data_if_t *data_if;
-    const audio_codec_vol_if_t  *sw_vol;
-    esp_codec_dev_type_t         dev_caps;
-    bool                         input_opened;
-    bool                         output_opened;
-    int                          volume;
-    float                        mic_gain;
-    bool                         muted;
-    bool                         mic_muted;
-    bool                         sw_vol_alloced;
-    esp_codec_dev_vol_curve_t    vol_curve;
-    bool                         disable_when_closed;
-    esp_codec_dev_channel_map_t  set_order;
-    esp_codec_dev_channel_map_t  cur_order;
-    esp_codec_dev_sample_info_t  fs;
-    codec_dev_mirror_handle_t    mirror;
-} codec_dev_t;
-
-typedef struct {
-    int  cur_ch_num;
-    int  req_ch_num;
-    int  bus_len;
-} layout_frame_info_t;
 
 const audio_codec_if_t *esp_audio_hw_proc_get_codec_if(esp_codec_dev_handle_t handle)
 {
     codec_dev_t *dev = (codec_dev_t *)handle;
     return dev ? dev->codec_if : NULL;
-}
-
-static inline const char *esp_codec_dev_i2s_mode_to_string(esp_codec_dev_i2s_mode_t mode)
-{
-    switch (mode) {
-        case ESP_CODEC_DEV_I2S_MODE_NONE:
-            return "NONE";
-        case ESP_CODEC_DEV_I2S_MODE_DEFAULT:
-            return "DEFAULT";
-        case ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS:
-            return "STD_PHILIPS";
-        case ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS:
-            return "TDM_PHILIPS";
-        case ESP_CODEC_DEV_I2S_MODE_PDM_TX:
-            return "PDM_TX";
-        case ESP_CODEC_DEV_I2S_MODE_PDM_RX:
-            return "PDM_RX";
-        case ESP_CODEC_DEV_I2S_MODE_MAX:
-            return "MAX";
-        default:
-            return "UNKNOWN";
-    }
-    return "UNKNOWN";
 }
 
 static inline bool _verify_codec_ready(codec_dev_t *dev)
@@ -166,26 +118,13 @@ static float _get_vol_db(esp_codec_dev_vol_curve_t *curve, int vol)
     return 0.0;
 }
 
-static inline void _update_codec_setting(codec_dev_t *dev)
-{
-    esp_codec_dev_handle_t h = (esp_codec_dev_handle_t)dev;
-    if (dev->output_opened) {
-        esp_codec_dev_set_out_vol(h, dev->volume);
-        esp_codec_dev_set_out_mute(h, dev->muted);
-    }
-    if (dev->input_opened) {
-        esp_codec_dev_set_in_gain(h, dev->mic_gain);
-        esp_codec_dev_set_in_mute(h, dev->mic_muted);
-    }
-}
-
 static bool _verify_fs_para(esp_codec_dev_sample_info_t *fs)
 {
     if (fs == NULL) {
         ESP_LOGE(TAG, "Sample info is NULL");
         return false;
     }
-    if (fs->channel == 0 || fs->channel > 16) {
+    if (fs->channel == 0 || fs->channel > ESP_CODEC_DEV_MAX_BUS_SLOT || fs->channel_mask > (1U << fs->channel) - 1U) {
         ESP_LOGE(TAG, "Unsupported channel count: %d", fs->channel);
         return false;
     }
@@ -218,473 +157,17 @@ static bool _verify_fs_para(esp_codec_dev_sample_info_t *fs)
     return true;
 }
 
-static int _resolve_layout_from_fs(codec_dev_t *dev, const esp_codec_dev_sample_info_t *fs,
-                                   esp_codec_dev_i2s_mode_t mode, esp_codec_dev_channel_map_t *map)
+void codec_dev_apply_vol_mute(codec_dev_t *dev)
 {
-    if (dev == NULL || fs == NULL || map == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
+    esp_codec_dev_handle_t h = (esp_codec_dev_handle_t)dev;
+    if (dev->output_opened) {
+        esp_codec_dev_set_out_vol(h, dev->volume);
+        esp_codec_dev_set_out_mute(h, dev->muted);
     }
-    if ((dev->dev_caps & ESP_CODEC_DEV_TYPE_IN) && fs->channel == 4 && mode == ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS) {
-        // When use 2ch 32bit to get 4ch 16bit, memory holds channel IDs 3,1,4,2.
-        map->value = ESP_CODEC_DEV_STD_4CH_ORDER;
-        return ESP_CODEC_DEV_OK;
+    if (dev->input_opened) {
+        esp_codec_dev_set_in_gain(h, dev->mic_gain);
+        esp_codec_dev_set_in_mute(h, dev->mic_muted);
     }
-    const audio_codec_if_t *codec_if = dev->codec_if;
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    if (codec_if == NULL || codec_if->hw_base.get_order_list == NULL ||
-        data_if == NULL || data_if->get_order == NULL) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    const esp_codec_dev_device_map_info_t *dev_order_list = NULL;
-    int dev_list_size = 0;
-    int ret = codec_if->hw_base.get_order_list(&codec_if->hw_base, &dev_order_list, &dev_list_size);
-    if (ret != ESP_CODEC_DEV_OK || dev_order_list == NULL || dev_list_size <= 0) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    esp_codec_dev_channel_map_t data_map = {0};
-    ret = data_if->get_order(data_if, fs->channel, fs->channel_mask, &data_map);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-    const esp_codec_dev_device_map_info_t *dev_cfg = NULL;
-    for (int i = 0; i < dev_list_size; i++) {
-        if (dev_order_list[i].channels == fs->channel && dev_order_list[i].mode == mode) {
-            dev_cfg = &dev_order_list[i];
-        }
-    }
-    if (dev_cfg == NULL) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    return codec_dev_order_resolve_memory_map(&data_map, &dev_cfg->map, map);
-}
-
-static inline void _get_layout_maps(codec_dev_t *dev,
-                                    esp_codec_dev_channel_map_t *req_map,
-                                    esp_codec_dev_channel_map_t *cur_map,
-                                    bool *need_convert)
-{
-    if (req_map != NULL) {
-        *req_map = dev->set_order;
-    }
-    if (cur_map != NULL) {
-        *cur_map = dev->cur_order;
-    }
-    if (need_convert != NULL) {
-        *need_convert = (dev->set_order.value != 0 &&
-                         dev->cur_order.value != 0 &&
-                         dev->set_order.value != dev->cur_order.value);
-    }
-}
-
-static int _get_effective_map(codec_dev_t *dev, esp_codec_dev_channel_map_t *map)
-{
-    if (dev == NULL || map == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    bool need_convert = false;
-    _get_layout_maps(dev, NULL, NULL, &need_convert);
-    if (need_convert) {
-        *map = dev->set_order;
-        return ESP_CODEC_DEV_OK;
-    }
-    if (dev->cur_order.value != 0) {
-        *map = dev->cur_order;
-        return ESP_CODEC_DEV_OK;
-    }
-    return ESP_CODEC_DEV_NOT_FOUND;
-}
-
-static int _resolve_fs_candidate_by_map(const audio_codec_data_if_t *data_if,
-                                        const esp_codec_dev_channel_map_t *req_map,
-                                        const esp_codec_dev_device_map_info_t *cand,
-                                        uint16_t *ch_mask)
-{
-    if (data_if == NULL || req_map == NULL || cand == NULL || ch_mask == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (cand->channels > ESP_CODEC_DEV_MAX_ORDER_CHANNEL) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    esp_codec_dev_channel_map_t data_map = {0};
-    int ret = codec_dev_order_resolve_data_map(req_map, &cand->map, &data_map);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-
-    uint16_t cand_ch_mask = 0;
-    ret = data_if->get_channel_mask(data_if, cand->channels, &data_map, &cand_ch_mask);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-
-    esp_codec_dev_channel_map_t verify_data_map = {0};
-    ret = data_if->get_order(data_if, cand->channels, cand_ch_mask, &verify_data_map);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-
-    esp_codec_dev_channel_map_t verify_map = {0};
-    ret = codec_dev_order_resolve_memory_map(&verify_data_map, &cand->map, &verify_map);
-    if (ret != ESP_CODEC_DEV_OK || verify_map.value != req_map->value) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    *ch_mask = cand_ch_mask;
-    return ESP_CODEC_DEV_OK;
-}
-
-static int _resolve_fs_by_map(codec_dev_t *dev, const esp_codec_dev_channel_map_t *req_map,
-                              esp_codec_dev_i2s_mode_t data_mode,
-                              uint8_t *ch_num, uint16_t *ch_mask, esp_codec_dev_i2s_mode_t *out_mode)
-{
-    if (dev == NULL || req_map == NULL || req_map->value == 0 ||
-        ch_num == NULL || ch_mask == NULL || out_mode == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    const audio_codec_if_t *codec_if = dev->codec_if;
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    if (codec_if == NULL || codec_if->hw_base.get_order_list == NULL) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    if (data_if == NULL || data_if->get_channel_mask == NULL || data_if->get_order == NULL) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    const esp_codec_dev_device_map_info_t *dev_order_list = NULL;
-    int dev_list_size = 0;
-    int ret = codec_if->hw_base.get_order_list(&codec_if->hw_base, &dev_order_list, &dev_list_size);
-    if (ret != ESP_CODEC_DEV_OK || dev_order_list == NULL || dev_list_size <= 0) {
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    const char *mode_name = esp_codec_dev_i2s_mode_to_string(data_mode);
-
-    for (int i = 0; i < dev_list_size; i++) {
-        const esp_codec_dev_device_map_info_t *cand = &dev_order_list[i];
-        if (cand->mode != data_mode) {
-            continue;
-        }
-        uint16_t cand_ch_mask = 0;
-        ret = _resolve_fs_candidate_by_map(data_if, req_map, cand, &cand_ch_mask);
-        if (ret != ESP_CODEC_DEV_OK) {
-            continue;
-        }
-        ESP_LOGI(TAG, "Resolved map 0x%lx to ch_num=%d, ch_mask=0x%x, data_mode=%s, dev_map=0x%lx",
-                 (unsigned long)req_map->value, cand->channels, cand_ch_mask, mode_name,
-                 (unsigned long)cand->map.value);
-        *ch_num = cand->channels;
-        *ch_mask = cand_ch_mask;
-        *out_mode = data_mode;
-        return ESP_CODEC_DEV_OK;
-    }
-
-    ESP_LOGE(TAG, "Failed to resolve map 0x%lx for data mode %s", (unsigned long)req_map->value, mode_name);
-    return ESP_CODEC_DEV_NOT_SUPPORT;
-}
-
-static int _reconfig_fs_by_map(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map)
-{
-    if (dev->input_opened == false && dev->output_opened == false) {
-        ESP_LOGE(TAG, "Codec device is not open");
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    if (dev->data_if == NULL || dev->data_if->get_mode == NULL) {
-        ESP_LOGE(TAG, "Data interface does not support mode query");
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    esp_codec_dev_i2s_mode_t in_mode, out_bus_mode;
-    if (dev->data_if->get_mode(dev->data_if, &in_mode, &out_bus_mode) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to get data interface mode");
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-
-    esp_codec_dev_i2s_mode_t data_mode = in_mode;
-    uint16_t new_ch_mask = 0;
-    uint8_t new_ch_num = 0;
-    esp_codec_dev_i2s_mode_t resolved_mode = ESP_CODEC_DEV_I2S_MODE_NONE;
-    int ret = _resolve_fs_by_map(dev, map, data_mode, &new_ch_num, &new_ch_mask, &resolved_mode);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-    if (new_ch_mask == dev->fs.channel_mask && new_ch_num == dev->fs.channel) {
-        dev->set_order = *map;
-        dev->cur_order = *map;
-        return ESP_CODEC_DEV_OK;
-    }
-
-    const audio_codec_if_t *codec = dev->codec_if;
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    esp_codec_dev_sample_info_t old_fs = dev->fs;
-    esp_codec_dev_sample_info_t new_fs = dev->fs;
-    new_fs.channel_mask = new_ch_mask;
-    new_fs.channel = new_ch_num;
-    bool adc_enabled = false;
-    bool dac_enabled = false;
-    bool data_if_enabled = false;
-    ESP_LOGI(TAG, "Reconfigure hardware to ch_num=%d and ch_mask=0x%x", new_ch_num, new_ch_mask);
-
-    /* Logical close: disable codec and data_if */
-    if (codec) {
-        if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
-            if (codec->adc_if->ops.enable(codec, false) != ESP_CODEC_DEV_OK) {
-                return ESP_CODEC_DEV_DRV_ERR;
-            }
-        }
-        if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
-            if (codec->dac_if->ops.enable(codec, false) != ESP_CODEC_DEV_OK) {
-                return ESP_CODEC_DEV_DRV_ERR;
-            }
-        }
-    }
-    if (data_if->enable) {
-        if (data_if->enable(data_if, dev->dev_caps, false) != ESP_CODEC_DEV_OK) {
-            return ESP_CODEC_DEV_DRV_ERR;
-        }
-    }
-    /* Logical open: set_fmt, codec set_fs, enable */
-    if (data_if->set_fmt) {
-        ret = data_if->set_fmt(data_if, dev->dev_caps, &new_fs);
-        if (ret != ESP_CODEC_DEV_OK) {
-            goto reconfig_rollback;
-        }
-    }
-    if (data_if->enable) {
-        ret = data_if->enable(data_if, dev->dev_caps, true);
-        if (ret != ESP_CODEC_DEV_OK) {
-            goto reconfig_rollback;
-        }
-        data_if_enabled = true;
-    }
-    if (codec && codec->hw_base.set_fs) {
-        ret = codec->hw_base.set_fs(&codec->hw_base, &new_fs, dev->dev_caps);
-        if (ret != 0) {
-            ret = ESP_CODEC_DEV_NOT_SUPPORT;
-            goto reconfig_rollback;
-        }
-    }
-    if (codec) {
-        if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
-            ret = codec->adc_if->ops.enable(codec, true);
-            if (ret != ESP_CODEC_DEV_OK) {
-                goto reconfig_rollback;
-            }
-            adc_enabled = true;
-        }
-        if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
-            ret = codec->dac_if->ops.enable(codec, true);
-            if (ret != ESP_CODEC_DEV_OK) {
-                goto reconfig_rollback;
-            }
-            dac_enabled = true;
-        }
-    }
-
-    dev->fs = new_fs;
-    _update_codec_setting(dev);
-    dev->set_order = *map;
-    dev->cur_order = *map;
-    ESP_LOGI(TAG, "Applied map 0x%lX with ch_num=%d, ch_mask=0x%x, mode=%s",
-             (unsigned long)map->value, new_ch_num, (unsigned)new_ch_mask, esp_codec_dev_i2s_mode_to_string(resolved_mode));
-    return ESP_CODEC_DEV_OK;
-
-reconfig_rollback:
-    if (codec) {
-        if (dac_enabled && codec->dac_if && codec->dac_if->ops.enable) {
-            codec->dac_if->ops.enable(codec, false);
-        }
-        if (adc_enabled && codec->adc_if && codec->adc_if->ops.enable) {
-            codec->adc_if->ops.enable(codec, false);
-        }
-    }
-    if (data_if_enabled && data_if->enable) {
-        data_if->enable(data_if, dev->dev_caps, false);
-    }
-    if (data_if->set_fmt) {
-        data_if->set_fmt(data_if, dev->dev_caps, &old_fs);
-    }
-    if (codec && codec->hw_base.set_fs) {
-        codec->hw_base.set_fs(&codec->hw_base, &old_fs, dev->dev_caps);
-    }
-    if (data_if->enable) {
-        data_if->enable(data_if, dev->dev_caps, true);
-    }
-    if (codec) {
-        if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
-            codec->adc_if->ops.enable(codec, true);
-        }
-        if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
-            codec->dac_if->ops.enable(codec, true);
-        }
-    }
-    return ret == ESP_CODEC_DEV_OK ? ESP_CODEC_DEV_DRV_ERR : ret;
-}
-
-static int _get_layout_frame_info(codec_dev_t *dev, const esp_codec_dev_channel_map_t *req_map,
-                                  const esp_codec_dev_channel_map_t *cur_map,
-                                  int user_len, layout_frame_info_t *frame_info)
-{
-    frame_info->cur_ch_num = codec_dev_channel_map_count_channels(cur_map);
-    frame_info->req_ch_num = codec_dev_channel_map_count_channels(req_map);
-    if (frame_info->cur_ch_num <= 0 || frame_info->req_ch_num <= 0) {
-        ESP_LOGE(TAG, "Invalid channel count for layout conversion");
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-
-    int bytes_per_sample = dev->fs.bits_per_sample / 8;
-    int user_frame_size = frame_info->req_ch_num * bytes_per_sample;
-    int bus_frame_size = frame_info->cur_ch_num * bytes_per_sample;
-    if (bytes_per_sample <= 0 || user_frame_size <= 0 || bus_frame_size <= 0 ||
-        (user_len % user_frame_size) != 0) {
-        ESP_LOGE(TAG, "Invalid frame size or length alignment: bytes_per_sample=%d, user_frame_size=%d, bus_frame_size=%d, user_len=%d",
-                 bytes_per_sample, user_frame_size, bus_frame_size, user_len);
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    frame_info->bus_len = (user_len / user_frame_size) * bus_frame_size;
-    return ESP_CODEC_DEV_OK;
-}
-
-static int _read_with_convert(codec_dev_t *dev, void *data, int len,
-                              const esp_codec_dev_channel_map_t *req_map,
-                              const esp_codec_dev_channel_map_t *cur_map)
-{
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    layout_frame_info_t frame_info = {0};
-    int ret = _get_layout_frame_info(dev, req_map, cur_map, len, &frame_info);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-
-    uint8_t *recv_data = (uint8_t *)data;
-    if (frame_info.cur_ch_num != frame_info.req_ch_num) {
-        recv_data = (uint8_t *)malloc(frame_info.bus_len);
-        if (recv_data == NULL) {
-            return ESP_CODEC_DEV_NO_MEM;
-        }
-    }
-    ret = data_if->read(data_if, recv_data, frame_info.bus_len);
-    if (ret == ESP_CODEC_DEV_OK) {
-        codec_dev_data_cvt_info_t src = {
-            .data = recv_data,
-            .len = frame_info.bus_len,
-            .map = *cur_map,
-            .bits = dev->fs.bits_per_sample,
-            .ch_num = frame_info.cur_ch_num,
-        };
-        codec_dev_data_cvt_info_t dst = {
-            .data = (uint8_t *)data,
-            .len = len,
-            .map = *req_map,
-            .bits = dev->fs.bits_per_sample,
-            .ch_num = frame_info.req_ch_num,
-        };
-        ret = codec_dev_data_cvt_layout(&src, &dst);
-    }
-    if (ret == ESP_CODEC_DEV_OK && dev->mirror) {
-        (void)codec_dev_mirror_write(dev->mirror, (const uint8_t *)data, len);
-    }
-    if (recv_data != (uint8_t *)data) {
-        free(recv_data);
-    }
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to read audio data, ret=0x%x", ret);
-    }
-    return ret;
-}
-
-static int _read_direct(codec_dev_t *dev, void *data, int len)
-{
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    int ret = data_if->read(data_if, (uint8_t *)data, len);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to read audio data, ret=0x%x", ret);
-        return ret;
-    }
-    if (dev->mirror) {
-        (void)codec_dev_mirror_write(dev->mirror, (const uint8_t *)data, len);
-    }
-    return ESP_CODEC_DEV_OK;
-}
-
-static int _write_with_convert(codec_dev_t *dev, void *data, int len,
-                               const esp_codec_dev_channel_map_t *req_map,
-                               const esp_codec_dev_channel_map_t *cur_map)
-{
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    if (data_if->write == NULL) {
-        ESP_LOGE(TAG, "Data interface write is not supported");
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    layout_frame_info_t frame_info = {0};
-    int ret = _get_layout_frame_info(dev, req_map, cur_map, len, &frame_info);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ret;
-    }
-    uint8_t *send_data = (uint8_t *)data;
-    if (frame_info.cur_ch_num != frame_info.req_ch_num) {
-        send_data = (uint8_t *)malloc(frame_info.bus_len);
-        if (send_data == NULL) {
-            return ESP_CODEC_DEV_NO_MEM;
-        }
-    }
-    codec_dev_data_cvt_info_t src = {
-        .data = (uint8_t *)data,
-        .len = len,
-        .map = *req_map,
-        .bits = dev->fs.bits_per_sample,
-        .ch_num = frame_info.req_ch_num,
-    };
-    codec_dev_data_cvt_info_t dst = {
-        .data = send_data,
-        .len = frame_info.bus_len,
-        .map = *cur_map,
-        .bits = dev->fs.bits_per_sample,
-        .ch_num = frame_info.cur_ch_num,
-    };
-    ret = codec_dev_data_cvt_layout(&src, &dst);
-    if (ret == ESP_CODEC_DEV_OK) {
-        if (dev->sw_vol) {
-            dev->sw_vol->process(dev->sw_vol, send_data, frame_info.bus_len, send_data, frame_info.bus_len);
-        }
-        ret = data_if->write(data_if, send_data, frame_info.bus_len);
-    }
-    if (send_data != (uint8_t *)data) {
-        free(send_data);
-    }
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to write audio data, ret=0x%x", ret);
-    }
-    return ret;
-}
-
-static int _write_direct(codec_dev_t *dev, void *data, int len)
-{
-    const audio_codec_data_if_t *data_if = dev->data_if;
-    if (data_if->write == NULL) {
-        ESP_LOGE(TAG, "Data interface write is not supported");
-        return ESP_CODEC_DEV_NOT_SUPPORT;
-    }
-    if (dev->sw_vol) {
-        dev->sw_vol->process(dev->sw_vol, (uint8_t *)data, len, (uint8_t *)data, len);
-    }
-    int ret = data_if->write(data_if, (uint8_t *)data, len);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to write audio data, ret=0x%x", ret);
-    }
-    return ret;
-}
-
-static int _get_adc_label(codec_dev_t *dev, const char **label)
-{
-    if (dev == NULL || label == NULL) {
-        return ESP_CODEC_DEV_INVALID_ARG;
-    }
-    if (dev->codec_if && dev->codec_if->hw_base.get_adc_label) {
-        return dev->codec_if->hw_base.get_adc_label(&dev->codec_if->hw_base, label);
-    }
-    return ESP_CODEC_DEV_NOT_SUPPORT;
 }
 
 esp_codec_dev_handle_t esp_codec_dev_new(esp_codec_dev_cfg_t *cfg)
@@ -705,6 +188,7 @@ esp_codec_dev_handle_t esp_codec_dev_new(esp_codec_dev_cfg_t *cfg)
         _get_default_vol_curve(&dev->vol_curve);
     }
     dev->disable_when_closed = true;
+    dev->order_row_count = CODEC_DEV_ORDER_TABLE_UNLOADED;
     return (esp_codec_dev_handle_t)dev;
 }
 
@@ -728,8 +212,6 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         ESP_LOGI(TAG, "Codec device is already open");
         return ESP_CODEC_DEV_OK;
     }
-    bool input_opened = false;
-    bool output_opened = false;
     bool data_if_enabled = false;
     bool adc_enabled = false;
     bool dac_enabled = false;
@@ -738,24 +220,46 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         if (_verify_drv_ready(dev, false) == false) {
             ESP_LOGE(TAG, "Codec does not support input");
         } else {
-            input_opened = true;
+            dev->input_opened = true;
         }
     }
     if ((dev->dev_caps & ESP_CODEC_DEV_TYPE_OUT)) {
         if (_verify_drv_ready(dev, true) == false) {
             ESP_LOGE(TAG, "Codec does not support output");
         } else {
-            output_opened = true;
+            dev->output_opened = true;
         }
     }
-    if (input_opened == false && output_opened == false) {
+    if (dev->input_opened == false && dev->output_opened == false) {
         ESP_LOGE(TAG, "Failed to open codec device because the driver is not ready");
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
     const audio_codec_if_t *codec = dev->codec_if;
     const audio_codec_data_if_t *data_if = dev->data_if;
+    codec_dev_layout_plan_t layout = {0};
+    ret = codec_dev_layout_prepare_open(dev, &verified_fs, &layout);
+    if (ret != ESP_CODEC_DEV_OK) {
+        goto open_cleanup;
+    }
+    if (dev->output_opened) {
+        if (codec == NULL || codec->dac_if == NULL || codec->dac_if->ops.set_vol == NULL) {
+            if (dev->sw_vol == NULL) {
+                dev->sw_vol = audio_codec_new_sw_vol();
+                if (dev->sw_vol == NULL) {
+                    ESP_LOGE(TAG, "Failed to allocate software volume");
+                    ret = ESP_CODEC_DEV_NO_MEM;
+                    goto open_cleanup;
+                }
+                dev->sw_vol_alloced = true;
+            }
+        }
+        if (dev->sw_vol) {
+            dev->sw_vol->open(dev->sw_vol, &verified_fs, VOL_TRANSITION_TIME);
+        }
+    }
     if (data_if->set_fmt) {
-        ret = data_if->set_fmt(data_if, dev->dev_caps, &verified_fs);
+        esp_codec_dev_sample_info_t data_fs = verified_fs;
+        ret = data_if->set_fmt(data_if, dev->dev_caps, &data_fs);
         if (ret != ESP_CODEC_DEV_OK) {
             ESP_LOGE(TAG, "Failed to set data interface format, ret=0x%x", ret);
             goto open_cleanup;
@@ -778,7 +282,7 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
                 goto open_cleanup;
             }
         }
-        if (input_opened && codec->adc_if && codec->adc_if->ops.enable) {
+        if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
             if (codec->adc_if->ops.enable(codec, true) != ESP_CODEC_DEV_OK) {
                 ESP_LOGE(TAG, "Failed to enable ADC, ret=0x%x", ret);
                 ret = ESP_CODEC_DEV_DRV_ERR;
@@ -786,7 +290,7 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
             }
             adc_enabled = true;
         }
-        if (output_opened && codec->dac_if && codec->dac_if->ops.enable) {
+        if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
             if (codec->dac_if->ops.enable(codec, true) != ESP_CODEC_DEV_OK) {
                 ESP_LOGE(TAG, "Failed to enable DAC, ret=0x%x", ret);
                 ret = ESP_CODEC_DEV_DRV_ERR;
@@ -795,38 +299,26 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
             dac_enabled = true;
         }
     }
-    dev->input_opened = input_opened;
-    dev->output_opened = output_opened;
-    if (output_opened) {
-        if (codec == NULL || codec->dac_if == NULL || codec->dac_if->ops.set_vol == NULL) {
-            if (dev->sw_vol == NULL) {
-                dev->sw_vol = audio_codec_new_sw_vol();
-                if (dev->sw_vol == NULL) {
-                    ESP_LOGE(TAG, "Failed to allocate software volume");
-                    ret = ESP_CODEC_DEV_NO_MEM;
-                    goto open_cleanup;
-                }
-                dev->sw_vol_alloced = true;
-            }
-        }
-        if (dev->sw_vol) {
-            dev->sw_vol->open(dev->sw_vol, &verified_fs, VOL_TRANSITION_TIME);
-        }
-    }
-    _update_codec_setting(dev);
+    codec_dev_layout_commit_open_map(dev, &layout);
+    codec_dev_apply_vol_mute(dev);
     dev->fs = verified_fs;
-    *fs = verified_fs;
-    esp_codec_dev_i2s_mode_t in_mode, out_mode;
-    if (data_if->get_mode && data_if->get_mode(data_if, &in_mode, &out_mode) == ESP_CODEC_DEV_OK) {
-        esp_codec_dev_i2s_mode_t cur_mode = (dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT) ? out_mode : in_mode;
-        esp_codec_dev_channel_map_t cur_map = {0};
-        _resolve_layout_from_fs(dev, &verified_fs, cur_mode, &cur_map);
-        dev->cur_order = cur_map;
+    if (dev->cur_map.value == 0 && data_if->get_mode) {
+        esp_codec_dev_i2s_mode_t in_mode = ESP_CODEC_DEV_I2S_MODE_NONE;
+        esp_codec_dev_i2s_mode_t out_mode = ESP_CODEC_DEV_I2S_MODE_NONE;
+        if (data_if->get_mode(data_if, &in_mode, &out_mode) == ESP_CODEC_DEV_OK) {
+            esp_codec_dev_i2s_mode_t cur_mode = (dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT) ? out_mode : in_mode;
+            esp_codec_dev_channel_map_t cur_map = {0};
+            codec_dev_layout_resolve_map_from_fs(dev, &verified_fs, cur_mode, &cur_map);
+            dev->cur_map = cur_map;
+        }
     }
-    ESP_LOGI(TAG, "Opened %s codec device, current map is 0x%lX", dev_dir, (unsigned long)dev->cur_order.value);
+    ESP_LOGI(TAG, "Opened %s codec device, current map is 0x%lX", dev_dir, (unsigned long)dev->cur_map.value);
     return ESP_CODEC_DEV_OK;
 
 open_cleanup:
+    // set_fmt must establish stable bus clocks before configuring a BCLK-dependent codec. If a
+    // later codec operation fails and no precise shrink rollback exists, disable this direction and
+    // unregister its map queries; an already-open peer may remain on the known-valid widened bus.
     if (codec) {
         if (dac_enabled && codec->dac_if && codec->dac_if->ops.enable) {
             codec->dac_if->ops.enable(codec, false);
@@ -838,8 +330,15 @@ open_cleanup:
     if (data_if_enabled && data_if->enable) {
         data_if->enable(data_if, dev->dev_caps, false);
     }
+    if (dev->sw_vol && dev->output_opened) {
+        dev->sw_vol->close(dev->sw_vol);
+    }
+    codec_dev_layout_clear_map_query(dev, ESP_CODEC_DEV_TYPE_OUT);
+    codec_dev_layout_clear_map_query(dev, ESP_CODEC_DEV_TYPE_IN);
     dev->input_opened = false;
     dev->output_opened = false;
+    dev->set_map.value = 0;
+    dev->cur_map.value = 0;
     ESP_LOGE(TAG, "Failed to open codec device, ret=0x%x", ret);
     return ret;
 }
@@ -865,7 +364,7 @@ int esp_codec_dev_get_caps(esp_codec_dev_handle_t handle, esp_codec_dev_capabili
 int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec_dev_channel_map_t *map)
 {
     codec_dev_t *dev = (codec_dev_t *)handle;
-    if (dev == NULL || map == NULL || codec_dev_order_is_valid(map) == false) {
+    if (dev == NULL || map == NULL || codec_dev_map_is_valid(map) == false) {
         ESP_LOGE(TAG, "Invalid handle or data layout map");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
@@ -882,13 +381,14 @@ int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec
         ESP_LOGE(TAG, "Failed to get data interface mode");
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
-    esp_codec_dev_i2s_mode_t cur_mode = dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT ? out_mode : in_mode;
-    const char *dir_str = dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT ? "Output" : "Input";
+    esp_codec_dev_type_t dir = (dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT) ? ESP_CODEC_DEV_TYPE_OUT : ESP_CODEC_DEV_TYPE_IN;
+    esp_codec_dev_i2s_mode_t cur_mode = dir == ESP_CODEC_DEV_TYPE_OUT ? out_mode : in_mode;
+    const char *dir_str = dir == ESP_CODEC_DEV_TYPE_OUT ? "Output" : "Input";
     uint16_t ch_mask = dev->fs.channel_mask;
     uint8_t ch_num = dev->fs.channel;
-    esp_codec_dev_channel_map_t cur_map = dev->cur_order;  // After open, cur_map reflects the active hardware layout.
+    esp_codec_dev_channel_map_t cur_map = dev->cur_map;
     if (cur_map.value == 0) {
-        int ret = _resolve_layout_from_fs(dev, &dev->fs, cur_mode, &cur_map);
+        int ret = codec_dev_layout_resolve_map_from_fs(dev, &dev->fs, cur_mode, &cur_map);
         if (ret != ESP_CODEC_DEV_OK || cur_map.value == 0) {
             ESP_LOGE(TAG, "[%s] Current data layout is unknown; check the current format or call set_data_layout after open", dir_str);
             return ESP_CODEC_DEV_NOT_SUPPORT;
@@ -896,25 +396,25 @@ int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec
     }
     ESP_LOGI(TAG, "[%s] Change data layout from 0x%lX to 0x%lX, ch_num=%d, ch_mask=0x%x, mode=%s",
              dir_str, (unsigned long)cur_map.value, (unsigned long)map->value,
-             ch_num, ch_mask, esp_codec_dev_i2s_mode_to_string(cur_mode));
+             ch_num, ch_mask, codec_dev_i2s_mode_name(cur_mode));
     if (map->value == cur_map.value) {
-        dev->set_order = *map;
+        dev->set_map = *map;
         ESP_LOGI(TAG, "[%s] Data layout is already 0x%lX", dir_str, (unsigned long)cur_map.value);
         return ESP_CODEC_DEV_OK;
     }
 
-    if (dev->dev_caps & ESP_CODEC_DEV_TYPE_IN) {
+    if (dir == ESP_CODEC_DEV_TYPE_IN) {
         bool need_modify = true;
-        if (ch_num == 4 && cur_mode == ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS && cur_map.value == ESP_CODEC_DEV_STD_4CH_ORDER) {
+        if (ch_num == 4 && cur_mode == ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS && cur_map.value == ESP_CODEC_DEV_STD_4CH_MAP) {
             need_modify = false;
             ESP_LOGI(TAG, "[%s] Skip hardware reconfigure for default 4-channel STD map, current map=0x%lX, requested map=0x%lX",
                      dir_str, (unsigned long)cur_map.value, (unsigned long)map->value);
         }
         if (need_modify) {
-            int hw_ret = _reconfig_fs_by_map(dev, map);
+            int hw_ret = codec_dev_layout_reconfigure_hw(dev, map);
             if (hw_ret == ESP_CODEC_DEV_OK) {
                 ESP_LOGI(TAG, "[%s] Applied requested layout by reconfiguring hardware, current map=0x%lX",
-                         dir_str, (unsigned long)dev->cur_order.value);
+                         dir_str, (unsigned long)dev->cur_map.value);
                 return ESP_CODEC_DEV_OK;
             }
             ESP_LOGI(TAG, "[%s] Hardware reconfigure failed, use software layout conversion instead, ret=0x%x, current map=0x%lX, requested map=0x%lX",
@@ -924,11 +424,11 @@ int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec
 
     const esp_codec_dev_channel_map_t *superset_map = &cur_map;
     const esp_codec_dev_channel_map_t *subset_map = map;
-    if (dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT) {
+    if (dir == ESP_CODEC_DEV_TYPE_OUT) {
         superset_map = map;
         subset_map = &cur_map;
     }
-    if (codec_dev_order_contains(superset_map, subset_map)) {
+    if (codec_dev_map_contains(superset_map, subset_map)) {
         ESP_LOGI(TAG, "[%s] Requested layout 0x%lX can be converted from current map 0x%lX",
                  dir_str, (unsigned long)map->value, (unsigned long)cur_map.value);
     } else {
@@ -937,8 +437,8 @@ int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
 
-    dev->set_order = *map;
-    dev->cur_order = cur_map;
+    dev->set_map = *map;
+    dev->cur_map = cur_map;
     if (cur_map.value != map->value) {
         ESP_LOGI(TAG, "[%s] Use software layout conversion from 0x%lX to 0x%lX",
                  dir_str, (unsigned long)cur_map.value, (unsigned long)map->value);
@@ -954,9 +454,6 @@ int esp_codec_dev_get_data_layout(esp_codec_dev_handle_t handle, esp_codec_dev_c
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     if (dev->input_opened || dev->output_opened) {
-        if (_get_effective_map(dev, map) == ESP_CODEC_DEV_OK) {
-            return ESP_CODEC_DEV_OK;
-        }
         if (dev->data_if == NULL || dev->data_if->get_mode == NULL) {
             ESP_LOGE(TAG, "Data interface does not support mode query");
             return ESP_CODEC_DEV_NOT_SUPPORT;
@@ -966,8 +463,26 @@ int esp_codec_dev_get_data_layout(esp_codec_dev_handle_t handle, esp_codec_dev_c
             ESP_LOGE(TAG, "Failed to get data interface mode");
             return ESP_CODEC_DEV_NOT_SUPPORT;
         }
-        esp_codec_dev_i2s_mode_t cur_mode = dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT ? out_mode : in_mode;
-        int ret = _resolve_layout_from_fs(dev, &dev->fs, cur_mode, map);
+        esp_codec_dev_type_t dir = ESP_CODEC_DEV_TYPE_IN;
+        if (dev->dev_caps == ESP_CODEC_DEV_TYPE_OUT) {
+            dir = ESP_CODEC_DEV_TYPE_OUT;
+        }
+        esp_codec_dev_i2s_mode_t cur_mode = (dir == ESP_CODEC_DEV_TYPE_OUT) ? out_mode : in_mode;
+        bool need_convert = false;
+        codec_dev_layout_get_maps(dev, NULL, NULL, &need_convert);
+        if (!need_convert && codec_dev_layout_can_use_map_query(dev, dir, cur_mode)) {
+            int ret = codec_dev_layout_resolve_map_from_bus(dev, dir, map, NULL);
+            if (ret == ESP_CODEC_DEV_OK) {
+                dev->cur_map = *map;
+                return ESP_CODEC_DEV_OK;
+            }
+            ESP_LOGE(TAG, "Failed to derive live bus layout, ret=0x%x", ret);
+            return ret;
+        }
+        if (codec_dev_layout_get_app_map(dev, map) == ESP_CODEC_DEV_OK) {
+            return ESP_CODEC_DEV_OK;
+        }
+        int ret = codec_dev_layout_resolve_map_from_fs(dev, &dev->fs, cur_mode, map);
         if (ret != ESP_CODEC_DEV_OK) {
             ESP_LOGE(TAG, "Failed to resolve data layout from sample format, ret=0x%x", ret);
             return ret;
@@ -996,7 +511,7 @@ int esp_codec_dev_get_data_layout(esp_codec_dev_handle_t handle, esp_codec_dev_c
         ESP_LOGE(TAG, "Data interface mode is none");
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
-    ret = _resolve_layout_from_fs(dev, &fs, cur_mode, map);
+    ret = codec_dev_layout_resolve_map_from_fs(dev, &fs, cur_mode, map);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to resolve data layout from sample format, ret=0x%x", ret);
         return ret;
@@ -1016,13 +531,17 @@ int esp_codec_dev_set_data_layout_label(esp_codec_dev_handle_t handle, const cha
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
     const char *adc_label = NULL;
-    int ret = _get_adc_label(dev, &adc_label);
+    if (dev->codec_if == NULL) {
+        ESP_LOGE(TAG, "Failed to get ADC label, ret=0x%x", ESP_CODEC_DEV_NOT_SUPPORT);
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    int ret = audio_hw_get_adc_label(&dev->codec_if->hw_base, &adc_label);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to get ADC label, ret=0x%x", ret);
         return ret;
     }
     esp_codec_dev_channel_map_t map = {0};
-    ret = codec_dev_order_from_labels(adc_label, label, &map);
+    ret = codec_dev_map_from_labels(adc_label, label, &map);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to convert label to data layout map, ret=0x%x", ret);
         return ret;
@@ -1042,7 +561,11 @@ int esp_codec_dev_get_data_layout_label(esp_codec_dev_handle_t handle, char *lab
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
     const char *adc_label = NULL;
-    int ret = _get_adc_label(dev, &adc_label);
+    if (dev->codec_if == NULL) {
+        ESP_LOGE(TAG, "Failed to get ADC label, ret=0x%x", ESP_CODEC_DEV_NOT_SUPPORT);
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    int ret = audio_hw_get_adc_label(&dev->codec_if->hw_base, &adc_label);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to get ADC label, ret=0x%x", ret);
         return ret;
@@ -1053,7 +576,7 @@ int esp_codec_dev_get_data_layout_label(esp_codec_dev_handle_t handle, char *lab
         ESP_LOGE(TAG, "Failed to get data layout, ret=0x%x", ret);
         return ret;
     }
-    ret = codec_dev_order_to_labels(adc_label, &map, label, label_size);
+    ret = codec_dev_map_to_labels(adc_label, &map, label, label_size);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Failed to convert data layout map to label, ret=0x%x", ret);
     }
@@ -1075,18 +598,7 @@ int esp_codec_dev_read(esp_codec_dev_handle_t handle, void *data, int len)
         ESP_LOGE(TAG, "Input is not open");
         return ESP_CODEC_DEV_WRONG_STATE;
     }
-    esp_codec_dev_channel_map_t req_map = {0};
-    esp_codec_dev_channel_map_t cur_map = {0};
-    bool need_convert = false;
-    _get_layout_maps(dev, &req_map, &cur_map, &need_convert);
-    if (req_map.value != 0 && cur_map.value == 0) {
-        ESP_LOGW(TAG, "Current data layout is unknown, skip software layout conversion");
-        need_convert = false;
-    }
-    if (need_convert) {
-        return _read_with_convert(dev, data, len, &req_map, &cur_map);
-    }
-    return _read_direct(dev, data, len);
+    return codec_dev_layout_read(dev, data, len);
 }
 
 int esp_codec_dev_mirror_cfg(esp_codec_dev_handle_t handle, int size)
@@ -1148,18 +660,7 @@ int esp_codec_dev_write(esp_codec_dev_handle_t handle, void *data, int len)
         ESP_LOGE(TAG, "Output is not open");
         return ESP_CODEC_DEV_WRONG_STATE;
     }
-    esp_codec_dev_channel_map_t req_map = {0};
-    esp_codec_dev_channel_map_t cur_map = {0};
-    bool need_convert = false;
-    _get_layout_maps(dev, &req_map, &cur_map, &need_convert);
-    if (req_map.value != 0 && cur_map.value == 0) {
-        ESP_LOGW(TAG, "Current data layout is unknown, skip software layout conversion");
-        need_convert = false;
-    }
-    if (need_convert) {
-        return _write_with_convert(dev, data, len, &req_map, &cur_map);
-    }
-    return _write_direct(dev, data, len);
+    return codec_dev_layout_write(dev, data, len);
 }
 
 int esp_codec_dev_set_out_vol(esp_codec_dev_handle_t handle, int volume)
@@ -1494,12 +995,14 @@ int esp_codec_dev_close(esp_codec_dev_handle_t handle)
     if (data_if->enable) {
         data_if->enable(data_if, dev->dev_caps, false);
     }
+    codec_dev_layout_clear_map_query(dev, ESP_CODEC_DEV_TYPE_OUT);
+    codec_dev_layout_clear_map_query(dev, ESP_CODEC_DEV_TYPE_IN);
     if (dev->sw_vol) {
         dev->sw_vol->close(dev->sw_vol);
     }
     dev->output_opened = dev->input_opened = false;
-    dev->set_order.value = 0;
-    dev->cur_order.value = 0;
+    dev->set_map.value = 0;
+    dev->cur_map.value = 0;
 
 cleanup:
     if (dev->mirror) {

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v2.0.0-beta4
+
+### Breaking Change
+
+- Defined direction-specific `channel_mask` semantics for mapping-aware TDM: input masks select physical slots, while output masks select codec logical channels.
+- Mapping-aware STD requests wider than two channels now require a full application channel mask; unsupported partial masks return `ESP_CODEC_DEV_NOT_SUPPORT` instead of being silently widened.
+- Removed `audio_codec_data_if_t.get_order` and `get_channel_mask`. Slot mask to channel map conversion is done inside the component (`codec_dev_order_from_mask` / `codec_dev_order_to_mask`); custom data interfaces no longer implement these hooks.
 
 ### Feature
 
@@ -8,6 +14,8 @@
 - Added `audio_codec_ctrl_ref_acquire()` / `audio_codec_ctrl_ref_release()` so IN/OUT instances can share one control interface. Acquire returning `1` means first user (open hardware); release returning `0` means last user (close).
 - Added VAD hardware processing APIs for configuration, event callbacks, status polling, and filtered-audio FIFO reads. `esp_audio_hw_vad_get_frame_info()` reports the sample rate, sample width, channel count and exact frame size of the filtered-audio output, which is a different data format from the main ADC capture, so a caller can size its buffer before reading. A frame read is all-or-nothing and reports zero bytes on every failure.
 - Added common codec interrupt pin configuration through `audio_hw_int_cfg_t` and `audio_codec_cfg_t`.
+- Added codec-aware full-duplex I2S/TDM frame-width coordination: mapping-aware TDM sides expand `total_slot` from dense `get_order_list`/`order_info[]` rows, with atomic TX/RX reconfiguration, rollback, and actual data-layout reporting.
+- Unified codec frame geometry as dense permutations of 1..N in `order_info[]` (`channels` is frame slot count); physical converter count comes from `get_caps`.
 
 ## v2.0.0-beta3
 

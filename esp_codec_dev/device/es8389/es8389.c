@@ -157,10 +157,20 @@ static const esp_codec_dev_vol_range_t vol_range = {
     },
 };
 
+/* TDM frames group the odd channels ahead of the even ones, whatever the frame is wide. Rows past
+   the converter count describe where the channels sit in that frame, not extra converters. */
 static const esp_codec_dev_device_map_info_t order_info[] = {
-    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0)}},
+    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
+};
+
+static const uint8_t es8389_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es8389_cap_rates[] = {
+    8000, 16000, 24000, 32000, 44100, 48000, 88200, 96000, 192000,
 };
 
 static int es8389_write_reg(audio_codec_es8389_t *codec, int reg, int value)
@@ -941,6 +951,65 @@ static int es8389_get_order_list(const audio_hw_base_t *h, const esp_codec_dev_d
     return ESP_CODEC_DEV_OK;
 }
 
+static int es8389_copy_caps(const esp_codec_dev_capability_t *src_caps, int src_count,
+                            esp_codec_dev_capability_t *out_caps, int *out_count)
+{
+    if (out_caps == NULL || *out_count == 0) {
+        *out_count = src_count;
+        return ESP_CODEC_DEV_OK;
+    }
+    if (*out_count < src_count) {
+        *out_count = src_count;
+        ESP_LOGE(TAG, "Copy capabilities failed: output capacity is smaller than %d", src_count);
+        return ESP_CODEC_DEV_NO_MEM;
+    }
+    for (int i = 0; i < src_count; i++) {
+        out_caps[i] = src_caps[i];
+    }
+    *out_count = src_count;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es8389_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                           esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE || (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        ESP_LOGE(TAG, "Get capabilities failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 4,  // Two ADCs plus two DAC reference channels
+            .bits_per_sample = es8389_cap_bits,
+            .bits_num = sizeof(es8389_cap_bits) / sizeof(es8389_cap_bits[0]),
+            .sample_rates = es8389_cap_rates,
+            .sample_rate_num = sizeof(es8389_cap_rates) / sizeof(es8389_cap_rates[0]),
+        },
+    };
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,
+            .bits_per_sample = es8389_cap_bits,
+            .bits_num = sizeof(es8389_cap_bits) / sizeof(es8389_cap_bits[0]),
+            .sample_rates = es8389_cap_rates,
+            .sample_rate_num = sizeof(es8389_cap_rates) / sizeof(es8389_cap_rates[0]),
+        },
+    };
+    if (dev_type == ESP_CODEC_DEV_TYPE_IN) {
+        return es8389_copy_caps(&adc_caps, 1, caps, count);
+    }
+    if (dev_type == ESP_CODEC_DEV_TYPE_OUT) {
+        return es8389_copy_caps(&dac_caps, 1, caps, count);
+    }
+    const esp_codec_dev_capability_t in_out_caps[] = {adc_caps, dac_caps};
+    return es8389_copy_caps(in_out_caps, 2, caps, count);
+}
+
 static void es8389_save_adc_label(audio_codec_es8389_t *codec, const char *label)
 {
     codec->adc_label[0] = '\0';
@@ -988,6 +1057,7 @@ const audio_codec_if_t *es8389_codec_new(es8389_codec_cfg_t *codec_cfg)
     codec->base.hw_base.dump_reg = es8389_dump;
     codec->base.hw_base.get_order_list = es8389_get_order_list;
     codec->base.hw_base.get_adc_label = es8389_get_adc_label;
+    codec->base.hw_base.get_caps = es8389_get_caps;
     codec->base.hw_base.close = es8389_close;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     es8389_save_adc_label(codec, codec_cfg->adc_cfg.label);

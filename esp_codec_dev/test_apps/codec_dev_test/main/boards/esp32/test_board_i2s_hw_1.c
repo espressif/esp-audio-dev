@@ -236,7 +236,9 @@ static void verify_record_label_layout(esp_codec_dev_handle_t record_dev)
     esp_codec_dev_channel_map_t order = {0};
     ret = esp_codec_dev_get_data_layout(record_dev, &order);
     TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
-    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 0, 0, 0, 0, 0, 0), order.value);
+    // Map fields hold slot indices into the board label list "RE,FL", not channel IDs, so asking for
+    // FL first swaps the two slots.
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), order.value);
 }
 
 static void test_codec_dev_using_esp32_lyrat_mini_es7243e(void)
@@ -256,7 +258,8 @@ static void test_codec_dev_using_esp32_lyrat_mini_es7243e(void)
     verify_record_label_layout(ctx.record_dev);
 
     esp_codec_dev_channel_map_t order = {
-        .value = ESP_CODEC_DEV_CHANNEL_MAP(2, 1, 0, 0, 0, 0, 0, 0),
+        // ES7243e has set to "FL,RE", so just play as normal is OK.
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2),
     };
     esp_codec_dev_set_data_layout(ctx.play_dev, &order);
 
@@ -290,6 +293,7 @@ static void test_codec_dev_using_esp32_lyrat_mini_es7243e(void)
         TEST_ESP_OK(ret);
         got_size += data_size;
     }
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, test_analyze_recorded_pcm_s32(dump_buf, dump_written, data_size));
     free(data);
 
     ret = esp_codec_dev_close(ctx.play_dev);
@@ -378,7 +382,7 @@ static void test_codec_dev_using_esp32_lyrat_mini_es7243e_ref_signal(void)
     TEST_ASSERT_EQUAL_STRING("RE,FL", label);
     ret = esp_codec_dev_open(ctx.play_dev, &play_fs);
     TEST_ESP_OK(ret);
-    ret = esp_codec_dev_set_out_vol(ctx.play_dev, 40);
+    ret = esp_codec_dev_set_out_vol(ctx.play_dev, 60);
     TEST_ESP_OK(ret);
 
     const int chunk_frames = 1024;
@@ -598,8 +602,26 @@ static void test_codec_dev_using_esp32_es8388_record_and_playback(void)
 
     int ret = esp_codec_dev_open(ctx.play_dev, &fs);
     TEST_ESP_OK(ret);
+    fs.bits_per_sample = 32;
     ret = esp_codec_dev_open(ctx.record_dev, &fs);
     TEST_ESP_OK(ret);
+    esp_codec_dev_sleep(1000);
+    esp_codec_dev_close(ctx.play_dev);
+    esp_codec_dev_sleep(100);
+    fs.bits_per_sample = 32;
+    ret = esp_codec_dev_open(ctx.play_dev, &fs);
+    TEST_ESP_OK(ret);
+    esp_codec_dev_close(ctx.record_dev);
+    esp_codec_dev_sleep(100);
+    fs.bits_per_sample = 16;
+    ret = esp_codec_dev_open(ctx.record_dev, &fs);
+    TEST_ESP_OK(ret);
+    esp_codec_dev_close(ctx.play_dev);
+    esp_codec_dev_sleep(100);
+    fs.bits_per_sample = 16;
+    ret = esp_codec_dev_open(ctx.play_dev, &fs);
+    TEST_ESP_OK(ret);
+    esp_codec_dev_sleep(100);
 
     const int chunk_size = fs.sample_rate * fs.channel * (fs.bits_per_sample >> 3) / 20;
     uint8_t *data = (uint8_t *)malloc(chunk_size);

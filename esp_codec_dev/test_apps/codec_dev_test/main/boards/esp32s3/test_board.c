@@ -401,7 +401,7 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
 
     char label[16] = {0};
     /* Pre-open: I2S already init as 4-slot TDM on RX path */
-    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0), "record before open");
+    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4), "record before open");
     ret = esp_codec_dev_get_data_layout_label(record_dev, label, sizeof(label));
     TEST_ESP_OK(ret);
     TEST_ASSERT_EQUAL_STRING("FL,RE,FR,NA", label);
@@ -409,7 +409,7 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
 
     ret = esp_codec_dev_open(record_dev, &fs);
     TEST_ESP_OK(ret);
-    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0), "record after open");
+    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4), "record after open");
     ret = esp_codec_dev_get_data_layout_label(record_dev, label, sizeof(label));
     TEST_ESP_OK(ret);
     TEST_ASSERT_EQUAL_STRING("FL,RE,FR,NA", label);
@@ -418,7 +418,7 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
     fs.channel_mask = BIT(0) | BIT(1);
     ret = esp_codec_dev_open(play_dev, &fs);
     TEST_ESP_OK(ret);
-    test_check_data_layout(play_dev, ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0), "play after open");
+    test_check_data_layout(play_dev, ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2), "play after open");
 
     int data_size = 240 * 3 * fs.channel * (fs.bits_per_sample >> 3);
     uint8_t *data = (uint8_t *)malloc(data_size);
@@ -436,25 +436,25 @@ static void test_codec_dev_using_s3_board(bool use_xtal)
         TEST_ESP_OK(esp_audio_hw_alc_set_channel_mask(record_dev, 0x00));  // Disable ALC
     }
     esp_codec_dev_channel_map_t invalid_order = {
-        .value = ESP_CODEC_DEV_CHANNEL_MAP(9, 0, 0, 0, 0, 0, 0, 0),
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_1CH(9),
     };
     ret = esp_codec_dev_set_data_layout(record_dev, &invalid_order);
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, ret);
 
     /* Memory layout FL,RE => logical ch1->slot1, ch3->slot2 */
     esp_codec_dev_channel_map_t order = {
-        .value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 0, 0, 0, 0, 0, 0),
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 3),
     };
     ret = esp_codec_dev_set_data_layout(record_dev, &order);
     TEST_ESP_OK(ret);
-    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 0, 0, 0, 0, 0, 0), "record after set_data_layout");
+    test_check_data_layout(record_dev, ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 3), "record after set_data_layout");
     ret = esp_codec_dev_get_data_layout_label(record_dev, label, sizeof(label));
     TEST_ESP_OK(ret);
     TEST_ASSERT_EQUAL_STRING("FL,RE", label);
-    order.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0);
+    order.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2);
     ret = esp_codec_dev_set_data_layout(play_dev, &order);
     TEST_ESP_OK(ret);
-    test_check_data_layout(play_dev, ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0), "play after set_data_layout");
+    test_check_data_layout(play_dev, ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2), "play after set_data_layout");
 
     // After I2S enable, data will be received, but codec not ready yet, so better wait for a while
     esp_codec_dev_sleep(200);
@@ -887,9 +887,9 @@ static void test_case_play_4ch_record_6ch_tdm(void)
 
     esp_codec_dev_sample_info_t play_fs = {
         .sample_rate = 48000,
-        .channel = 4,
+        .channel = 2,
         .bits_per_sample = 16,
-        .channel_mask = BIT(0) | BIT(2),
+        .channel_mask = BIT(0) | BIT(1),
         .mclk_multiple = 384,
     };
     // ch1 NA NA NA

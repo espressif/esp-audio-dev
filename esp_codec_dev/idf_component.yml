@@ -1,4 +1,4 @@
-version: "2.0.0-beta3"
+version: "2.0.0-beta4"
 description: Audio codec device support for Espressif SoC
 url: https://github.com/espressif/esp-audio-dev/tree/main/esp_codec_dev
 documentation: "https://github.com/espressif/esp-audio-dev/blob/main/esp_codec_dev/README.md"

@@ -15,6 +15,15 @@ extern "C" {
 #endif  /* __cplusplus */
 
 /**
+ * @brief  Analog headphone / line-out load mode
+ */
+typedef enum {
+    AUDIO_HW_HEADPHONE_AUTO = 0,  /*!< Keep the codec default driver settings */
+    AUDIO_HW_HEADPHONE_DISABLE,   /*!< Line / high-Z load */
+    AUDIO_HW_HEADPHONE_ENABLE,    /*!< Typical headphone load */
+} audio_hw_headphone_mode_t;
+
+/**
  * @brief  Codec system clock configuration
  */
 typedef struct {
@@ -60,9 +69,10 @@ typedef struct {
  * @brief  Codec DAC loopback configuration
  */
 typedef struct {
-    bool    ref_enable;        /*!< Whether codec internal DAC reference loopback is enabled */
-    int8_t  ref_dac_ch;        /*!< DAC reference channel, 1 for ch1, 2 for ch2, -1 means not used */
-    int8_t  real_adc_data_ch;  /*!< Real ADC data channel, 1 for ch1, 2 for ch2, -1 means not used */
+    bool                       ref_enable;        /*!< Whether codec internal DAC reference loopback is enabled */
+    int8_t                     ref_dac_ch;        /*!< DAC reference channel, 1 for ch1, 2 for ch2, -1 means not used */
+    int8_t                     real_adc_data_ch;  /*!< Real ADC data channel, 1 for ch1, 2 for ch2, -1 means not used */
+    audio_hw_headphone_mode_t  headphone;         /*!< Analog output load: AUTO / DISABLE / ENABLE */
 } audio_hw_dac_cfg_t;
 
 /**

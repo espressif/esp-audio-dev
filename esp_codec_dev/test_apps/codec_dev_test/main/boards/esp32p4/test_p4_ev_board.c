@@ -222,7 +222,7 @@ static void verify_record_label_layout(esp_codec_dev_handle_t record_dev)
     esp_codec_dev_channel_map_t order = {0};
     ret = esp_codec_dev_get_data_layout(record_dev, &order);
     TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
-    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP(2, 1, 0, 0, 0, 0, 0, 0), order.value);
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), order.value);
 }
 
 static void fill_dacr_loopback_tone(int16_t *data, int frame_count, int scale)

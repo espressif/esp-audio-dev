@@ -31,6 +31,7 @@ set(srcs
         "mock/test_my_codec.c"
         "mock/test_layout_mock.c"
         "mock/test_adc_label.c"
+        "mock/test_bus_interface_mock.c"
         "common/test_board_periph.c"
         "mock/test_codec_print.c"
         "common/my_codec.c"
@@ -68,7 +69,8 @@ if(CONFIG_IDF_TARGET_ESP32C3)
 endif()
 
 idf_component_register(SRCS ${srcs}
-                       PRIV_INCLUDE_DIRS include
+                       PRIV_INCLUDE_DIRS
+                       include
                        PRIV_REQUIRES ${priv_requires}
                        WHOLE_ARCHIVE TRUE
                        EMBED_FILES "16k_mono_16bit.pcm"

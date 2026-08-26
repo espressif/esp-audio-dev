@@ -180,9 +180,14 @@ static const esp_audio_hw_proc_ops_t hw_proc = {
     .mute = &es8311_mute_ops,
 };
 
+/* TDM frames group the odd channels ahead of the even ones, whatever the frame is wide. Rows past
+   two slots describe where the channels sit in that frame, not extra converters. */
 static const esp_codec_dev_device_map_info_t order_info[] = {
-    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
+    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
 static const uint8_t es8311_cap_bits[] = {16, 24, 32};
@@ -190,30 +195,6 @@ static const uint8_t es8311_cap_bits[] = {16, 24, 32};
 static const uint32_t es8311_cap_rates[] = {
     8000, 11025, 12000, 16000, 22050, 24000,
     32000, 44100, 48000, 64000, 88200, 96000,
-};
-
-static const esp_codec_dev_capability_t adc_caps = {
-    .dev_type = ESP_CODEC_DEV_TYPE_IN,
-    .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
-    .flexible = {
-        .max_channels = 2,  // Include ref signal channel
-        .bits_per_sample = es8311_cap_bits,
-        .bits_num = sizeof(es8311_cap_bits) / sizeof(es8311_cap_bits[0]),
-        .sample_rates = es8311_cap_rates,
-        .sample_rate_num = sizeof(es8311_cap_rates) / sizeof(es8311_cap_rates[0]),
-    },
-};
-
-static const esp_codec_dev_capability_t dac_caps = {
-    .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-    .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
-    .flexible = {
-        .max_channels = 1,
-        .bits_per_sample = es8311_cap_bits,
-        .bits_num = sizeof(es8311_cap_bits) / sizeof(es8311_cap_bits[0]),
-        .sample_rates = es8311_cap_rates,
-        .sample_rate_num = sizeof(es8311_cap_rates) / sizeof(es8311_cap_rates[0]),
-    },
 };
 
 static int es8311_write_reg(audio_codec_es8311_t *codec, int reg, int value)
@@ -887,6 +868,28 @@ static int es8311_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,  // Include ref signal channel
+            .bits_per_sample = es8311_cap_bits,
+            .bits_num = sizeof(es8311_cap_bits) / sizeof(es8311_cap_bits[0]),
+            .sample_rates = es8311_cap_rates,
+            .sample_rate_num = sizeof(es8311_cap_rates) / sizeof(es8311_cap_rates[0]),
+        },
+    };
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 1,
+            .bits_per_sample = es8311_cap_bits,
+            .bits_num = sizeof(es8311_cap_bits) / sizeof(es8311_cap_bits[0]),
+            .sample_rates = es8311_cap_rates,
+            .sample_rate_num = sizeof(es8311_cap_rates) / sizeof(es8311_cap_rates[0]),
+        },
+    };
     if (dev_type == ESP_CODEC_DEV_TYPE_IN) {
         return es8311_copy_caps(&adc_caps, 1, caps, count);
     }
