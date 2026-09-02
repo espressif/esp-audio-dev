@@ -73,6 +73,14 @@ typedef struct {
     bool     reset_active_low;  /*!< false: reset active high, true: reset active low */
 } audio_hw_reset_cfg_t;
 
+/**
+ * @brief  Codec interrupt pin configuration
+ */
+typedef struct {
+    int16_t  int_pin;          /*!< Interrupt pin; -1 means unused */
+    bool     int_active_high;  /*!< Interrupt active level; true for high, false for low */
+} audio_hw_int_cfg_t;
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

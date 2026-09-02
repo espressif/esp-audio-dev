@@ -7,6 +7,7 @@
 
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "esp_err.h"
 #include "esp_log.h"
 
 #include "audio_codec_ctrl_if.h"
@@ -68,7 +69,8 @@ static int _i2c_master_read_reg(i2c_ctrl_t *i2c_ctrl, int addr, int addr_len, vo
     }
     int ret = i2c_master_transmit_receive(i2c_ctrl->dev_handle, addr_data, addr_len, data, data_len, DEFAULT_I2C_TRANS_TIMEOUT);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Fail to read from dev %x", i2c_ctrl->addr);
+        ESP_LOGE(TAG, "I2C read failed: dev=0x%02x reg=0x%04x err=%s",
+                 i2c_ctrl->addr, (unsigned)(addr & 0xFFFF), esp_err_to_name(ret));
     }
     return ret ? ESP_CODEC_DEV_READ_FAIL : ESP_CODEC_DEV_OK;
 }
@@ -94,7 +96,8 @@ static int _i2c_master_write_reg(i2c_ctrl_t *i2c_ctrl, int addr, int addr_len, v
         ret = i2c_master_transmit(i2c_ctrl->dev_handle, write_data, len, DEFAULT_I2C_TRANS_TIMEOUT);
     }
     if (ret != 0) {
-        ESP_LOGE(TAG, "Fail to write to dev %x", i2c_ctrl->addr);
+        ESP_LOGE(TAG, "I2C write failed: dev=0x%02x reg=0x%04x err=%s",
+                 i2c_ctrl->addr, (unsigned)(addr & 0xFFFF), esp_err_to_name(ret));
     }
     return ret ? ESP_CODEC_DEV_WRITE_FAIL : ESP_CODEC_DEV_OK;
 }

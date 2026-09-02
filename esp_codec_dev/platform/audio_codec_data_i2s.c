@@ -230,13 +230,14 @@ static inline void _show_channel_info(i2s_chan_handle_t channel)
         ESP_LOGW(TAG, "Failed to get I2S channel info");
         return;
     }
-    ESP_LOGI(TAG, "I2S channel info: enabled=%d, clk_src=%d, sclk_hz=%" PRIu32 ", mclk_hz=%" PRIu32 ", bclk_hz=%" PRIu32 ", mode_cfg=%p",
-             info.is_enabled, (int)info.clk_src, info.sclk_hz, info.mclk_hz, info.bclk_hz, info.mode_cfg);
-    ESP_LOGI(TAG, "I2S channel info: total_dma_buf_size=%" PRIu32,
-             info.total_dma_buf_size);
-    ESP_LOGI(TAG, "I2S channel info: port=%d, role=%s, dir=%s, mode=%s, pair_chan=%p",
+    ESP_LOGI(TAG,
+             "I2S channel info: port=%d role=%s dir=%s mode=%s enabled=%d "
+             "sclk=%" PRIu32 "Hz mclk=%" PRIu32 "Hz bclk=%" PRIu32 "Hz dma=%" PRIu32 "B",
              info.id, info.role == I2S_ROLE_MASTER ? "MASTER" : "SLAVE",
-             info.dir == I2S_DIR_TX ? "TX" : "RX", _i2s_mode_to_str(info.mode), info.pair_chan);
+             info.dir == I2S_DIR_TX ? "TX" : "RX", _i2s_mode_to_str(info.mode),
+             info.is_enabled, info.sclk_hz, info.mclk_hz, info.bclk_hz,
+             info.total_dma_buf_size);
+    ESP_LOGD(TAG, "I2S channel pointers: pair=%p mode_cfg=%p", info.pair_chan, info.mode_cfg);
 }
 
 static void _check_mclk_jitter(int mode, void *clk_cfg)
@@ -292,7 +293,7 @@ static void _check_mclk_jitter(int mode, void *clk_cfg)
         if (jitter_pct > 10) {
             ESP_LOGW(TAG, "MCLK jitter ratio: %d%%, source_clk: %" PRIu32 ", mclk: %" PRIu32, jitter_pct, source_clk, mclk);
         } else {
-            ESP_LOGI(TAG, "MCLK jitter ratio: %d%%, source_clk: %" PRIu32 ", mclk: %" PRIu32, jitter_pct, source_clk, mclk);
+            ESP_LOGD(TAG, "MCLK jitter ratio: %d%%, source_clk: %" PRIu32 ", mclk: %" PRIu32, jitter_pct, source_clk, mclk);
         }
     }
 }
@@ -731,16 +732,14 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, int slot_bit
                 return ESP_CODEC_DEV_DRV_ERR;
             }
 
-            ESP_LOGI(TAG, "I2S Driver mode(STD, %s), data_bit: %d, slot_bit: %d, ws_width: %" PRIu32 ", slot_mode: %s, slot_mask: 0x%x",
-                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width, slot_cfg.ws_width,
-                     slot_cfg.slot_mode == I2S_SLOT_MODE_MONO ? "MONO" : "STEREO", (int)slot_cfg.slot_mask);
             /* STD clk_cfg.bclk_div exists since IDF 5.5; log computed divider for all versions */
-            ESP_LOGI(TAG, "I2S Driver mode(STD, %s), sample_rate_hz: %" PRIu32 ", mclk_multiple: %d, clk_src: %d, bclk_div: %d",
-                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", clk_cfg.sample_rate_hz, (int)clk_cfg.mclk_multiple,
-                     (int)clk_cfg.clk_src, bclk_div);
+            ESP_LOGI(TAG, "STD %s: %" PRIu32 "Hz data/slot=%d/%db ws=%" PRIu32 " %s mask=0x%x mclk=%dx bdiv=%d",
+                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", clk_cfg.sample_rate_hz,
+                     (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width, slot_cfg.ws_width,
+                     slot_cfg.slot_mode == I2S_SLOT_MODE_MONO ? "MONO" : "STEREO", (int)slot_cfg.slot_mask,
+                     (int)clk_cfg.mclk_multiple, bclk_div);
             _check_mclk_jitter(I2S_COMM_MODE_STD, &clk_cfg);
-        }
-        break;
+        } break;
 #if SOC_I2S_SUPPORTS_PDM
         case I2S_COMM_MODE_PDM: {
             if (!is_playback) {
@@ -773,8 +772,9 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, int slot_bit
                     ESP_LOGE(TAG, "Failed to reconfigure PDM RX slot");
                     return ESP_CODEC_DEV_DRV_ERR;
                 }
-                ESP_LOGI(TAG, "PDM RX mode, data_bit: %d, slot_bit: %d, sample_rate: %d, slot_mask: 0x%x",
-                         fs->bits_per_sample, slot_bits, (int)fs->sample_rate, (int)fs->channel_mask);
+                ESP_LOGI(TAG, "PDM RX: %" PRIu32 "Hz data/slot=%d/%db mask=0x%x",
+                         clk_cfg.sample_rate_hz, (int)slot_cfg.data_bit_width,
+                         (int)slot_cfg.slot_bit_width, (int)slot_cfg.slot_mask);
 #else
                 ESP_LOGE(TAG, "PDM RX is not supported");
                 return ESP_CODEC_DEV_NOT_SUPPORT;
@@ -812,16 +812,16 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, int slot_bit
                     ESP_LOGE(TAG, "Failed to reconfigure PDM TX slot");
                     return ESP_CODEC_DEV_DRV_ERR;
                 }
-                ESP_LOGI(TAG, "PDM TX mode, data_bit: %d, slot_bit: %d, sample_rate: %d, slot_mask: 0x%x",
-                         fs->bits_per_sample, slot_bits, (int)fs->sample_rate, (int)fs->channel_mask);
+                ESP_LOGI(TAG, "PDM TX: %" PRIu32 "Hz data/slot=%d/%db mask=0x%x",
+                         clk_cfg.sample_rate_hz, (int)slot_cfg.data_bit_width,
+                         (int)slot_cfg.slot_bit_width, (int)fs->channel_mask);
                 _check_mclk_jitter(I2S_COMM_MODE_PDM, &clk_cfg);
 #else
                 ESP_LOGE(TAG, "PDM TX is not supported");
                 return ESP_CODEC_DEV_NOT_SUPPORT;
 #endif  /* SOC_I2S_SUPPORTS_PDM_TX */
             }
-        }
-        break;
+        } break;
 #endif  /* SOC_I2S_SUPPORTS_PDM */
 #if SOC_I2S_SUPPORTS_TDM
         case I2S_COMM_MODE_TDM: {
@@ -855,15 +855,14 @@ static int _set_drv_fs(i2s_chan_handle_t channel, bool is_playback, int slot_bit
             if (ret != ESP_OK) {
                 return ESP_CODEC_DEV_DRV_ERR;
             }
-            ESP_LOGI(TAG, "I2S Driver mode(TDM, %s), data_bit: %d, slot_bit: %d, ws_width: %" PRIu32 ", total_slot: %" PRIu32 ", slot_mask: 0x%x",
-                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width,
-                     slot_cfg.ws_width, slot_cfg.total_slot, (int)slot_cfg.slot_mask);
-            ESP_LOGI(TAG, "I2S Driver mode(TDM, %s), sample_rate_hz: %" PRIu32 ", mclk_multiple: %d, clk_src: %d, bclk_div: %" PRIu32,
-                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", clk_cfg.sample_rate_hz, (int)clk_cfg.mclk_multiple,
-                     (int)clk_cfg.clk_src, clk_cfg.bclk_div);
+            ESP_LOGI(TAG, "TDM %s: %" PRIu32 "Hz data/slot=%d/%db ws=%" PRIu32 " slots=%" PRIu32
+                          " mask=0x%x mclk=%dx bdiv=%" PRIu32,
+                     chan_info.dir == I2S_DIR_RX ? "RX" : "TX", clk_cfg.sample_rate_hz,
+                     (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width, slot_cfg.ws_width,
+                     slot_cfg.total_slot, (int)slot_cfg.slot_mask, (int)clk_cfg.mclk_multiple,
+                     clk_cfg.bclk_div);
             _check_mclk_jitter(I2S_COMM_MODE_TDM, &clk_cfg);
-        }
-        break;
+        } break;
 #endif  /* SOC_I2S_SUPPORTS_TDM */
         default:
             return ESP_CODEC_DEV_NOT_SUPPORT;
@@ -930,11 +929,11 @@ static int _check_fs_compatible(i2s_data_t *i2s_data, bool is_playback, const es
         }
         i2s_data->total_slot_bits = total_slot_bits;
         memcpy(_get_channel_fs(i2s_data, is_playback), fs, sizeof(esp_codec_dev_sample_info_t));
-        ESP_LOGI(TAG, "No peer channel; set slot width to %d", slot_bit);
+        ESP_LOGD(TAG, "No peer channel; set slot width to %d", slot_bit);
         return ESP_CODEC_DEV_OK;
     }
 
-    ESP_LOGI(TAG, "Active handles (in:%p, out:%p), peer handles (in:%p, out:%p)",
+    ESP_LOGD(TAG, "Active handles (in:%p, out:%p), peer handles (in:%p, out:%p)",
              i2s_data->rx.handle, i2s_data->tx.handle, peer_data->rx.handle, peer_data->tx.handle);
 
     // peer == i2s_data || peer != i2s_data
@@ -953,7 +952,7 @@ static int _check_fs_compatible(i2s_data_t *i2s_data, bool is_playback, const es
                 if (ret != ESP_CODEC_DEV_OK) {
                     return ret;
                 }
-                ESP_LOGI(TAG, "Peer channel is master and initialized; set slot width to %d", slot_bit);
+                ESP_LOGD(TAG, "Peer channel is master and initialized; set slot width to %d", slot_bit);
             } else {
                 ESP_LOGW(TAG, "Peer channel is master but not initialized; cannot apply the sample format to the active channel");
             }
@@ -969,7 +968,7 @@ static int _check_fs_compatible(i2s_data_t *i2s_data, bool is_playback, const es
 
             i2s_data->total_slot_bits = slot_bit * fs->channel;
             memcpy(_get_channel_fs(i2s_data, is_playback), fs, sizeof(esp_codec_dev_sample_info_t));
-            ESP_LOGI(TAG, "Applied the sample format to the active channel, slot width=%d, total slot bits=%d",
+            ESP_LOGD(TAG, "Applied the sample format to the active channel, slot width=%d, total slot bits=%d",
                      slot_bit, i2s_data->total_slot_bits);
         }
         return ret;

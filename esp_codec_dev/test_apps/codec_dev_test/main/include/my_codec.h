@@ -15,6 +15,7 @@
 #include "audio_codec_ctrl_if.h"
 #include "audio_codec_gpio_if.h"
 #include "esp_audio_hw_eq.h"
+#include "esp_audio_hw_vad.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -73,29 +74,44 @@ typedef struct {
 
 #define MY_CODEC_EQ_BAND_MAX  (5)
 
+/* Mock VAD filtered-audio output format. Kept small so tests can hold a frame on the stack, but
+ * the numbers stay mutually consistent the way a real driver's must be: frame_bytes covers a
+ * whole number of samples of MY_CODEC_VAD_BITS x MY_CODEC_VAD_CHANNELS. */
+#define MY_CODEC_VAD_SAMPLE_RATE  (8000)
+#define MY_CODEC_VAD_BITS         (16)
+#define MY_CODEC_VAD_CHANNELS     (1)
+#define MY_CODEC_VAD_FRAME_BYTES  (64)
+
 /**
  * @brief  Mock codec hardware audio processing state for unit tests
  */
 typedef struct {
-    float                   alc_min_gain;
-    float                   alc_max_gain;
-    float                   alc_target_gain;
-    int                     alc_channel_mask;
-    float                   alc_noise_gate;
-    float                   drc_min_gain;
-    float                   drc_max_gain;
-    float                   drc_offset_gain;
-    bool                    drc_enabled;
-    bool                    line_in_enabled;
-    bool                    line_out_enabled;
-    float                   auto_mute_noise_gate;
-    float                   auto_mute_vol;
-    bool                    auto_mute_enabled;
-    float                   soft_mute_ramp_rate;
-    bool                    soft_mute_enabled;
-    bool                    eq_enabled;
-    int                     eq_filter_num;
-    esp_audio_hw_eq_para_t  eq_band[MY_CODEC_EQ_BAND_MAX];
+    float                        alc_min_gain;
+    float                        alc_max_gain;
+    float                        alc_target_gain;
+    int                          alc_channel_mask;
+    float                        alc_noise_gate;
+    float                        drc_min_gain;
+    float                        drc_max_gain;
+    float                        drc_offset_gain;
+    bool                         drc_enabled;
+    bool                         line_in_enabled;
+    bool                         line_out_enabled;
+    float                        auto_mute_noise_gate;
+    float                        auto_mute_vol;
+    bool                         auto_mute_enabled;
+    float                        soft_mute_ramp_rate;
+    bool                         soft_mute_enabled;
+    bool                         eq_enabled;
+    int                          eq_filter_num;
+    esp_audio_hw_eq_para_t       eq_band[MY_CODEC_EQ_BAND_MAX];
+    esp_audio_hw_vad_cfg_t       vad_cfg;
+    bool                         vad_initialized;
+    bool                         vad_enabled;
+    bool                         vad_output_enabled;
+    bool                         vad_has_speech;
+    esp_audio_hw_vad_event_cb_t  vad_event_cb;
+    void                        *vad_event_arg;
 } my_codec_proc_state_t;
 
 /**

@@ -109,6 +109,7 @@ typedef struct {
     audio_hw_dac_cfg_t           dac_cfg;    /*!< DAC configuration for internal loopback */
     audio_hw_pa_cfg_t            pa_cfg;     /*!< PA configuration */
     audio_hw_reset_cfg_t         reset_cfg;  /*!< Reset configuration */
+    audio_hw_int_cfg_t           int_cfg;    /*!< Interrupt configuration */
 } audio_codec_cfg_t;
 
 /**

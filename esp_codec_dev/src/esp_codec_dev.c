@@ -215,8 +215,6 @@ static bool _verify_fs_para(esp_codec_dev_sample_info_t *fs)
     }
     fs->channel_mask = channel_mask;
     fs->mclk_multiple = mclk_multiple;
-    ESP_LOGI(TAG, "Use sample format ch_num=%d, ch_mask=0x%x, bits=%d, mclk_multiple=%d",
-             fs->channel, fs->channel_mask, fs->bits_per_sample, fs->mclk_multiple);
     return true;
 }
 
@@ -721,6 +719,11 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
     if (_verify_fs_para(&verified_fs) == false) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
+    // dev_caps is a bitmask, so mask it to keep the index within the table
+    const char *codec_name[] = {"None", "Input", "Output", "Input and Output"};
+    const char *dev_dir = codec_name[dev->dev_caps & ESP_CODEC_DEV_TYPE_IN_OUT];
+    ESP_LOGI(TAG, "%s: use sample format ch_num=%d, ch_mask=0x%x, bits=%d, mclk_multiple=%d", dev_dir,
+             verified_fs.channel, verified_fs.channel_mask, verified_fs.bits_per_sample, verified_fs.mclk_multiple);
     if (dev->input_opened || dev->output_opened) {
         ESP_LOGI(TAG, "Codec device is already open");
         return ESP_CODEC_DEV_OK;
@@ -820,8 +823,7 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         _resolve_layout_from_fs(dev, &verified_fs, cur_mode, &cur_map);
         dev->cur_order = cur_map;
     }
-    const char *codec_name[] = {"None", "Input", "Output", "Input and Output"};
-    ESP_LOGI(TAG, "Opened %s codec device, current map is 0x%lX", codec_name[dev->dev_caps], (unsigned long)dev->cur_order.value);
+    ESP_LOGI(TAG, "Opened %s codec device, current map is 0x%lX", dev_dir, (unsigned long)dev->cur_order.value);
     return ESP_CODEC_DEV_OK;
 
 open_cleanup:

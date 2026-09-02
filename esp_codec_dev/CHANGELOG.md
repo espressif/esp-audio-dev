@@ -6,6 +6,8 @@
 
 - Added `audio_codec_adc_label_parse()` to convert `adc_cfg.label` into a hardware MIC mask (LSB→MSB; bit i is set unless token i is `NA`) and an output `channel_num` (token count including `NA`). Allowed tokens are `FC`, `RE`, `FL`, `FR`, `SL`, `SR`, `BL`, `BR`, and `NA` (exact, case-sensitive). Duplicates are allowed; empty tokens such as `"FL,,RE"` and unknown tokens such as `"na"` or `"N/A"` are invalid; `NULL` or `""` yields mask `0xFFFF` and `channel_num` 0. Codecs can use the label to select which microphone channels are enabled.
 - Added `audio_codec_ctrl_ref_acquire()` / `audio_codec_ctrl_ref_release()` so IN/OUT instances can share one control interface. Acquire returning `1` means first user (open hardware); release returning `0` means last user (close).
+- Added VAD hardware processing APIs for configuration, event callbacks, status polling, and filtered-audio FIFO reads. `esp_audio_hw_vad_get_frame_info()` reports the sample rate, sample width, channel count and exact frame size of the filtered-audio output, which is a different data format from the main ADC capture, so a caller can size its buffer before reading. A frame read is all-or-nothing and reports zero bytes on every failure.
+- Added common codec interrupt pin configuration through `audio_hw_int_cfg_t` and `audio_codec_cfg_t`.
 
 ## v2.0.0-beta3
 

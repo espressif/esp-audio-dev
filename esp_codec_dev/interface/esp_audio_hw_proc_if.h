@@ -23,6 +23,7 @@
 #include "esp_audio_hw_eq.h"
 #include "esp_audio_hw_line.h"
 #include "esp_audio_hw_mute.h"
+#include "esp_audio_hw_vad.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,6 +106,25 @@ struct esp_audio_hw_mute_t {
     int (*enable_soft_mute)(const audio_hw_base_t *h, bool enable);                               /*!< Enable or disable soft mute */
 };
 
+/**
+ * @brief  VAD implementation table (vtable)
+ *
+ * @note  Each driver provides one static const instance shared by all codec
+ *        instances of that chip. Instance-specific state is obtained from
+ *        parameter @p h.
+ */
+typedef struct esp_audio_hw_vad_t esp_audio_hw_vad_t;
+
+struct esp_audio_hw_vad_t {
+    int (*init)(const audio_hw_base_t *h, const esp_audio_hw_vad_cfg_t *cfg);                  /*!< Configure VAD */
+    int (*enable)(const audio_hw_base_t *h, bool enable, bool output_enable);                  /*!< Enable VAD and optional output */
+    int (*reset)(const audio_hw_base_t *h);                                                    /*!< Reset VAD state */
+    int (*get_status)(const audio_hw_base_t *h, esp_audio_hw_vad_status_t *status);            /*!< Get VAD status */
+    int (*set_event_cb)(const audio_hw_base_t *h, esp_audio_hw_vad_event_cb_t cb, void *arg);  /*!< Set event callback */
+    int (*get_frame_info)(const audio_hw_base_t *h, esp_audio_hw_vad_frame_info_t *info);      /*!< Report VAD audio format */
+    int (*read_frame)(const audio_hw_base_t *h, uint8_t *buf, size_t len, size_t *read_len);   /*!< Read VAD audio */
+};
+
 typedef struct esp_audio_hw_proc_ops_t esp_audio_hw_proc_ops_t;
 
 /**
@@ -119,6 +139,7 @@ struct esp_audio_hw_proc_ops_t {
     const esp_audio_hw_eq_t   *eq;    /*!< EQ ops, NULL if not supported */
     const esp_audio_hw_line_t *line;  /*!< Line ops, NULL if not supported */
     const esp_audio_hw_mute_t *mute;  /*!< Mute ops, NULL if not supported */
+    const esp_audio_hw_vad_t  *vad;   /*!< VAD ops, NULL if not supported */
 };
 
 #ifdef __cplusplus

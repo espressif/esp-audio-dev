@@ -20,6 +20,7 @@ set(COMPONENT_SRCS
   src/hw_proc/esp_audio_hw_line.c
   src/hw_proc/esp_audio_hw_mute.c
   src/hw_proc/esp_audio_hw_eq.c
+  src/hw_proc/esp_audio_hw_vad.c
   src/hw_proc/esp_audio_hw_proc.c
 )
 
