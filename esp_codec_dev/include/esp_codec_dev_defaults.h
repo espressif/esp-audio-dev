@@ -145,10 +145,9 @@ typedef struct {
  * @note  The component containing this macro must be linked with WHOLE_ARCHIVE, or the
  *        descriptor symbol must be forced into the link with
  *        "-u audio_codec_desc_<codec_name>".
- * @note  cfg_size must be non-zero and must not equal sizeof(audio_codec_cfg_t);
- *        audio_codec_new() tells the two configuration forms apart by size. A chip cfg that
- *        happens to match that size must be padded with a reserved field. This is enforced
- *        at compile time.
+ * @note  cfg_size must be non-zero. It may equal sizeof(audio_codec_cfg_t).
+ *        When it does and build_fn is NULL, audio_codec_new() passes the buffer to create_fn as-is.
+ *        When it does and build_fn is set, only the audio_codec_cfg_t path is used (no chip-cfg pass-through).
  * @note  create_fn must copy any needed fields out of cfg. On the audio_codec_cfg_t path the
  *        chip cfg buffer is released immediately after create_fn returns.
  *
@@ -162,8 +161,6 @@ typedef struct {
     extern "C" {                                                                    \
         static_assert((cfg_size) > 0,                                               \
                       "Chip cfg size must be non-zero");                            \
-        static_assert((cfg_size) != sizeof(audio_codec_cfg_t),                      \
-                      "Chip cfg size must differ from sizeof(audio_codec_cfg_t)");  \
         extern const audio_codec_desc_t audio_codec_desc_##codec_name               \
         __attribute__((used, section(".audio_codec_desc"))) = {                     \
             .name = #codec_name,                                                    \
@@ -176,8 +173,6 @@ typedef struct {
 #define AUDIO_CODEC_REGISTER(codec_name, create_fn, cfg_size, build_fn)          \
     _Static_assert((cfg_size) > 0,                                               \
                    "Chip cfg size must be non-zero");                            \
-    _Static_assert((cfg_size) != sizeof(audio_codec_cfg_t),                      \
-                   "Chip cfg size must differ from sizeof(audio_codec_cfg_t)");  \
     const audio_codec_desc_t audio_codec_desc_##codec_name                       \
     __attribute__((used, section(".audio_codec_desc"))) = {                      \
         .name = #codec_name,                                                     \
@@ -244,7 +239,9 @@ const audio_codec_data_if_t *audio_codec_new_i2s_data(audio_codec_i2s_cfg_t *i2s
  * @note  codec_cfg may be either:
  *        - audio_codec_cfg_t; factory builds chip cfg via build_chip_cfg when provided
  *        - chip-specific configuration such as es8311_codec_cfg_t; passed through as-is
- *        cfg_size must match the chosen struct. Chip constructors may also be called directly.
+ *        cfg_size must match the chosen struct. If chip_cfg_size equals sizeof(audio_codec_cfg_t)
+ *        and build_chip_cfg is set, only the audio_codec_cfg_t path is used.
+ *        Chip constructors may also be called directly.
  * @note  External codecs can be made available through AUDIO_CODEC_REGISTER().
  *        Chip-private fields outside audio_codec_cfg_t must use the chip-specific cfg path.
  *

@@ -372,7 +372,8 @@ static int es8311_stop(audio_codec_es8311_t *codec, bool is_adc)
         // ret |= es8311_update_reg_bit(codec, ES8311_CLK_MANAGER_REG01, 0x0A, 0x00);
     } else {
         ret |= es8311_update_reg_bit(codec, ES8311_SDPIN_REG09, 0x40, 0x40);
-        ret |= es8311_write_reg(codec, ES8311_SYSTEM_REG0E, 0x0F);
+        /* Temporary uncomment, this configuration causes ADC to malfunction when enabled again */
+        // ret |= es8311_write_reg(codec, ES8311_SYSTEM_REG0E, 0x0F);
         ret |= es8311_write_reg(codec, ES8311_SYSTEM_REG12, 0x02);
         ret |= es8311_update_reg_bit(codec, ES8311_SYSTEM_REG0D, 0x08, 0x08);
         ret |= es8311_write_reg(codec, ES8311_DAC_REG37, 0x08);

@@ -16,6 +16,11 @@
 - Added common codec interrupt pin configuration through `audio_hw_int_cfg_t` and `audio_codec_cfg_t`.
 - Added codec-aware full-duplex I2S/TDM frame-width coordination: mapping-aware TDM sides expand `total_slot` from dense `get_order_list`/`order_info[]` rows, with atomic TX/RX reconfiguration, rollback, and actual data-layout reporting.
 - Unified codec frame geometry as dense permutations of 1..N in `order_info[]` (`channels` is frame slot count); physical converter count comes from `get_caps`.
+- Allowed `AUDIO_CODEC_REGISTER()` chip cfg size to equal `sizeof(audio_codec_cfg_t)`. When sizes match, `audio_codec_new()` uses `build_chip_cfg` if set, otherwise it passes the buffer to `create` as-is.
+
+### Bug Fixed
+
+- Fixed occasional ES8311 ADC recording errors after DAC was disabled, by not writing `ES8311_SYSTEM_REG0E` on DAC stop.
 
 ## v2.0.0-beta3
 

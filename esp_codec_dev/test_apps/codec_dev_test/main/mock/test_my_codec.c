@@ -550,8 +550,27 @@ static void my_codec_build_chip_cfg(const audio_codec_cfg_t *cfg, void *chip_cfg
     out->hw_gain = cfg->pa_cfg.hw_gain;
 }
 
+static const audio_codec_if_t *my_codec_create_from_shared(void *cfg)
+{
+    const audio_codec_cfg_t *in = (const audio_codec_cfg_t *)cfg;
+    my_codec_cfg_t chip = {
+        .ctrl_if = in->ctrl_if,
+        .gpio_if = in->gpio_if,
+        .hw_gain = in->pa_cfg.hw_gain,
+    };
+    return my_codec_new(&chip);
+}
+
+static void my_codec_build_shared_identity(const audio_codec_cfg_t *cfg, void *chip_cfg)
+{
+    memcpy(chip_cfg, cfg, sizeof(*cfg));
+}
+
 AUDIO_CODEC_REGISTER(my_codec, my_codec_new, sizeof(my_codec_cfg_t), my_codec_build_chip_cfg);
 AUDIO_CODEC_REGISTER(my_codec_nobuild, my_codec_new, sizeof(my_codec_cfg_t), NULL);
+AUDIO_CODEC_REGISTER(my_codec_shared_size, my_codec_create_from_shared, sizeof(audio_codec_cfg_t), NULL);
+AUDIO_CODEC_REGISTER(my_codec_shared_build, my_codec_create_from_shared, sizeof(audio_codec_cfg_t),
+                     my_codec_build_shared_identity);
 #ifdef CONFIG_CODEC_DUMMY_SUPPORT
 AUDIO_CODEC_REGISTER(dummy, my_codec_new, sizeof(my_codec_cfg_t), NULL);
 #endif  /* CONFIG_CODEC_DUMMY_SUPPORT */
@@ -581,6 +600,15 @@ static void test_audio_codec_link_registry(void)
 
     TEST_ASSERT_NULL(audio_codec_new("my_codec_nobuild", &common_cfg, sizeof(common_cfg)));
     codec_if = audio_codec_new("my_codec_nobuild", &chip_cfg, sizeof(chip_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+
+    codec_if = audio_codec_new("my_codec_shared_size", &common_cfg, sizeof(common_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+    TEST_ASSERT_NULL(audio_codec_new("my_codec_shared_size", &chip_cfg, sizeof(chip_cfg)));
+
+    codec_if = audio_codec_new("my_codec_shared_build", &common_cfg, sizeof(common_cfg));
     TEST_ASSERT_NOT_NULL(codec_if);
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
 

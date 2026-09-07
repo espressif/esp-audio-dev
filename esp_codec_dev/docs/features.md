@@ -301,7 +301,7 @@ v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_
 | `esp_codec_dev_uac_install()` / `esp_codec_dev_uac_new_dev()` | 安装 UAC 管理器并派生句柄。 |
 | `audio_codec_new_gpio()` | 创建 GPIO 操作接口。 |
 
-外部 codec：实现 `audio_codec_if_t` 与芯片 `*_codec_new()` 后，可直接把 `codec_if` 交给 `esp_codec_dev_new()`；若需走 `audio_codec_new("name", …)`，在文件作用域使用 `AUDIO_CODEC_REGISTER(name, create, cfg_size, build_chip_cfg)` 注册描述符。名称必须是有效且唯一的 C 标识符；内置 codec 同名时以内置实现为准，运行时会打印一条 warning，提示关闭对应的 `CONFIG_CODEC_*_SUPPORT` 以启用注册驱动。描述符在链接期收集，不执行运行时分配，也不支持注销。`cfg_size` 必须非零且不得等于 `sizeof(audio_codec_cfg_t)`（均由编译期断言强制），否则 `audio_codec_new()` 无法区分两种配置形态。`create` 必须把需要的字段拷出 cfg；走 `audio_codec_cfg_t` 路径时临时 chip cfg 在 `create` 返回后立刻释放。
+外部 codec：实现 `audio_codec_if_t` 与芯片 `*_codec_new()` 后，可直接把 `codec_if` 交给 `esp_codec_dev_new()`；若需走 `audio_codec_new("name", …)`，在文件作用域使用 `AUDIO_CODEC_REGISTER(name, create, cfg_size, build_chip_cfg)` 注册描述符。名称必须是有效且唯一的 C 标识符；内置 codec 同名时以内置实现为准，运行时会打印一条 warning，提示关闭对应的 `CONFIG_CODEC_*_SUPPORT` 以启用注册驱动。描述符在链接期收集，不执行运行时分配，也不支持注销。`cfg_size` 必须非零，允许等于 `sizeof(audio_codec_cfg_t)`。同 size 且 `build_chip_cfg` 为 NULL 时直通 `create`；同 size 且提供 builder 时只走 `audio_codec_cfg_t` 路径。`create` 必须把需要的字段拷出 cfg；走 `audio_codec_cfg_t` 路径时临时 chip cfg 在 `create` 返回后立刻释放。
 
 注册描述符所在组件必须完整参与链接。可以在该组件的 `CMakeLists.txt` 中设置：
 
@@ -315,7 +315,7 @@ idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-u audio_codec_desc_my_codec")
 ```
 
-不在 `audio_codec_cfg_t` 内的芯片专属字段应放在芯片 `*_codec_cfg_t` 中，通过 `cfg_size == chip_cfg_size` 直通；`build_chip_cfg` 从 `audio_codec_cfg_t` 构建芯片 cfg（可为 NULL，此时只接受芯片专用 cfg）。
+不在 `audio_codec_cfg_t` 内的芯片专属字段应放在芯片 `*_codec_cfg_t` 中，通过 `cfg_size == chip_cfg_size` 直通；`build_chip_cfg` 从 `audio_codec_cfg_t` 构建芯片 cfg（可为 NULL，此时只接受芯片专用 cfg，若其 size 等于 `audio_codec_cfg_t` 则把入参当作芯片 cfg 直通）。
 
 部分 codec 仍主要通过 `es8311_codec_new()` 等专用构造函数创建；迁移与字段对照见 [api_migration_guide.md](api_migration_guide.md)。
 

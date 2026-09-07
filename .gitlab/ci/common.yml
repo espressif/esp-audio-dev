@@ -16,6 +16,8 @@ variables:
   CI_TOOLS_PATH: "$CI_PROJECT_DIR/ci-tools"
   IDF_PATH: "/root/.espressif/esp-idf"
   IDF_GITHUB_ASSETS: "dl.espressif.cn/github_assets"
+  # Mirror for GitHub URLs kept by submodules nested inside esp-idf; set empty to fetch from github.com
+  CI_GITHUB_MIRROR_PREFIX: "https://jihulab.com/esp-mirror/"
 
   # Common image aliases used by trigger.yml
   CI_ESP_ENV_DEFAULT: "${CI_DOCKER_REGISTRY}/esp-env-v6.1:1"
