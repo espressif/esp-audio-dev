@@ -25,6 +25,8 @@ void test_print_pcm_s16_head(const uint8_t *data, int num_samples);
 /**
  * @brief  Sanity-check interleaved 16-bit captured PCM (stats + heuristics for silence/clip/stuck chunks).
  *
+ *         Fails when mean absolute level is below 50 (covers 0/-1 toggling dead ADC).
+ *
  * @param  buf          PCM buffer.
  * @param  len          Byte length (must be even, >= 2).
  * @param  chunk_bytes  If > 0 and len >= chunk_bytes, detect repeated fixed-size chunks (e.g. one read size).

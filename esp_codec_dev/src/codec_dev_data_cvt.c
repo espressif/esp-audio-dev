@@ -12,7 +12,7 @@
 
 #include "esp_log.h"
 
-#include "codec_dev_order.h"
+#include "codec_dev_map.h"
 #include "codec_dev_data_cvt.h"
 
 static const char *TAG = "ESP_DATA_CONVERT";
@@ -27,10 +27,10 @@ static inline bool _cvt_is_dense_memory_map(const esp_codec_dev_channel_map_t *m
     if (map == NULL || ch_num <= 0 || ch_num > 8) {
         return false;
     }
-    if (codec_dev_order_is_valid(map) == false) {
+    if (codec_dev_map_is_valid(map) == false) {
         return false;
     }
-    return codec_dev_channel_map_count_channels(map) == ch_num;
+    return codec_dev_map_count(map) == ch_num;
 }
 
 static int32_t _cvt_read_sample(const uint8_t *ptr, int bits)
@@ -248,9 +248,9 @@ int codec_dev_data_cvt_layout(const codec_dev_data_cvt_info_t *src, const codec_
             src_frame = src->data + f * src_frame_size;
         }
         for (int dst_pos = 1; dst_pos <= dst->ch_num; dst_pos++) {
-            uint8_t channel_id = codec_dev_channel_map_get_slot(&dst->map, (uint8_t)dst_pos);
+            uint8_t channel_id = codec_dev_map_get(&dst->map, (uint8_t)dst_pos);
             int32_t val = 0;
-            uint8_t src_pos = codec_dev_channel_map_find_pos(&src->map, channel_id);
+            uint8_t src_pos = codec_dev_map_find_pos(&src->map, channel_id);
             if (src_pos != 0) {
                 const uint8_t *s = src_frame + (src_pos - 1) * src_bps;
                 val = _cvt_read_sample(s, src->bits);

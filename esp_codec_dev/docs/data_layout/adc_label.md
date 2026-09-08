@@ -26,6 +26,8 @@
 | `BL` / `BR` | Back Left / Back Right |
 | `NA` | Not Available / Not Enabled |
 
+token 必须与上表完全一致（区分大小写）。`na`、`N/A`、`NF` 等均非法，不能用来关闭通道。
+
 ## 3. 映射规则
 
 1. 原理图上的 label 先定义“这一通道代表什么”。

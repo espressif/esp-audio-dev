@@ -18,6 +18,9 @@
 
 static const char *TAG = "CODEC_DEV_TEST_PCM";
 
+/* Dead ADC often toggles 0/-1 (mean_abs < 10). Real capture is far above this. */
+#define TEST_PCM_S16_MIN_MEAN_ABS  (5)
+
 void test_print_pcm_s16_head(const uint8_t *data, int num_samples)
 {
     if (data == NULL || num_samples <= 0) {
@@ -128,6 +131,9 @@ int test_analyze_recorded_pcm_s16(const uint8_t *buf, int len, int chunk_bytes)
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     if (llabs(mean) >= 24000) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (mean_abs < TEST_PCM_S16_MIN_MEAN_ABS) {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     if (chunk_count > 1 && repeated_chunks * 100 >= chunk_count * 10) {

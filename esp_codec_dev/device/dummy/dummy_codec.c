@@ -28,7 +28,8 @@ static const char *TAG = "DUMMY_CODEC";
 static int dummy_codec_pa_set(dummy_codec_t *codec, bool on)
 {
     if (codec == NULL || codec->cfg.gpio_if == NULL || codec->cfg.pa_cfg.pa_pin < 0) {
-        return ESP_CODEC_DEV_INVALID_ARG;
+        /* PA control disabled, do nothing */
+        return ESP_CODEC_DEV_OK;
     }
     bool level = codec->cfg.pa_cfg.pa_active_low ? !on : on;
     return codec->cfg.gpio_if->set(codec->cfg.pa_cfg.pa_pin, level);

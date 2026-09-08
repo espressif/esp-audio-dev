@@ -19,8 +19,10 @@ extern "C" {
 /**
  * @brief  ES7210 codec configuration, only supports ADC feature
  *
- *         ES7210 always works in TDM mode with all 4 MICs enabled.
- *         Use fs->channel_mask to select which channels to read.
+ *         ES7210 works in TDM mode. Hardware microphone enable follows adc_cfg.label:
+ *         each comma-separated token maps to MIC1..MIC4 in order, and "NA" leaves
+ *         that microphone unselected. A NULL or empty label enables all microphones.
+ *         Use fs->channel_mask to select which I2S slots to read.
  */
 typedef struct {
     const audio_codec_ctrl_if_t *ctrl_if;  /*!< Codec Control interface */

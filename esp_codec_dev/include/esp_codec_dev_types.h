@@ -36,7 +36,9 @@ extern "C" {
 #define ESP_CODEC_DEV_WRITE_FAIL   (0x10D)
 #define ESP_CODEC_DEV_READ_FAIL    (0x10E)
 
-#define ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel)  ((uint16_t)1 << (channel))
+#define ESP_CODEC_DEV_MAX_BUS_SLOT                (16)                        /*!< Max channels in sample_info / bus_info (matches uint16_t mask) */
+#define ESP_CODEC_DEV_MAX_MAP_CHANNELS            (8)                         /*!< Packed nibble map capacity */
+#define ESP_CODEC_DEV_MAKE_CHANNEL_MASK(channel)  ((uint16_t)1 << (channel))  /*!< Bit for 0-based channel index */
 
 /**
  * @brief  Codec Device type
@@ -77,10 +79,10 @@ typedef enum {
  *         - bits[23:20]  : Slot / channel ID at memory position 6
  *         - bits[27:24]  : Slot / channel ID at memory position 7
  *         - bits[31:28]  : Slot / channel ID at memory position 8
- *         Example: `MAP(1,3,2,4)=0x4231` means each PCM frame is ordered as ch1, ch3, ch2, ch4.
+ *         Example: `MAP_4CH(1,3,2,4)=0x4231` means each PCM frame is ordered as ch1, ch3, ch2, ch4.
  *
  * @note  A value of 0 means that memory position is unused. Used positions must form
- *        a dense prefix from `ch1` (no holes). Identity stereo is `MAP(1,2)=0x21`.
+ *        a dense prefix from `ch1` (no holes). Identity stereo is `MAP_2CH(1,2)=0x21`.
  */
 typedef struct {
     union {
@@ -99,7 +101,10 @@ typedef struct {
 } esp_codec_dev_channel_map_t;
 
 /**
- * @brief  Build a packed channel map
+ * @brief  Build a packed 8-position channel map
+ *
+ *         Unused trailing positions must be 0. Use `ESP_CODEC_DEV_CHANNEL_MAP_NCH`
+ *         helpers for maps with fewer than 8 used positions.
  */
 #define ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, ch5, ch6, ch7, ch8) \
     ((uint32_t)(ch1)        | \
@@ -111,23 +116,77 @@ typedef struct {
     ((uint32_t)(ch7) << 24) | \
     ((uint32_t)(ch8) << 28))
 
+#define ESP_CODEC_DEV_CHANNEL_MAP_1CH(ch1)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, 0, 0, 0, 0, 0, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_2CH(ch1, ch2)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, 0, 0, 0, 0, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_3CH(ch1, ch2, ch3)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, 0, 0, 0, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_4CH(ch1, ch2, ch3, ch4)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, 0, 0, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_5CH(ch1, ch2, ch3, ch4, ch5)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, ch5, 0, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_6CH(ch1, ch2, ch3, ch4, ch5, ch6)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, ch5, ch6, 0, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_7CH(ch1, ch2, ch3, ch4, ch5, ch6, ch7)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, ch5, ch6, ch7, 0)
+
+#define ESP_CODEC_DEV_CHANNEL_MAP_8CH(ch1, ch2, ch3, ch4, ch5, ch6, ch7, ch8)  \
+    ESP_CODEC_DEV_CHANNEL_MAP(ch1, ch2, ch3, ch4, ch5, ch6, ch7, ch8)
+
+/**
+ * @brief  Resolve one direction's slot mapping for a candidate bus width
+ *
+ *         The query is read-only and must not mutate codec or bus state.
+ */
+typedef int (*esp_codec_dev_map_resolve_cb_t)(void *ctx, esp_codec_dev_type_t dev_type,
+                                              uint8_t total_slot, esp_codec_dev_channel_map_t *mapping);
+
+/**
+ * @brief  Read-only device-map query used during bus planning
+ */
+typedef struct {
+    void                           *ctx;         /*!< Opaque caller-owned context */
+    esp_codec_dev_map_resolve_cb_t  resolve_cb;  /*!< Resolve callback */
+} esp_codec_dev_map_query_t;
+
+/**
+ * @brief  One direction's current I2S bus configuration
+ *
+ *         This describes the actual configured bus state rather than the original
+ *         application request.
+ */
+typedef struct {
+    esp_codec_dev_i2s_mode_t  mode;              /*!< Current I2S working mode */
+    uint32_t                  sample_rate;       /*!< Current sample rate in Hz */
+    int                       mclk_multiple;     /*!< Current MCLK / LRCK ratio */
+    uint8_t                   total_slot;        /*!< Number of physical slots on the bus */
+    uint8_t                   slot_bit;          /*!< Physical slot width in bits */
+    uint8_t                   data_bit;          /*!< Valid audio data width in bits */
+    uint16_t                  slot_mask;         /*!< Enabled physical slot mask */
+    uint16_t                  total_frame_bits;  /*!< Total frame width in bits */
+} esp_codec_dev_bus_info_t;
+
 /**
  * @brief  Device-side channel map info (mode + channels → map)
+ *
+ *         One entry states where the device places its channels in a frame of that width. A frame
+ *         may be wider than the device has converters, so `channels` is the frame width rather than
+ *         a channel count the device can be configured to. Query `get_caps` for the latter.
+ *
+ *         `map` must be a dense prefix holding each ID from 1 to `channels` exactly once.
  */
 typedef struct {
     esp_codec_dev_i2s_mode_t     mode;      /*!< I2S working mode */
-    uint8_t                      channels;  /*!< Number of channels on the bus */
+    uint8_t                      channels;  /*!< Number of slots in the frame this entry describes */
     esp_codec_dev_channel_map_t  map;       /*!< Bus-position to device channel ID mapping */
 } esp_codec_dev_device_map_info_t;
-
-/**
- * @brief  Data-side channel map info (channels + slot_mask → map)
- */
-typedef struct {
-    uint8_t                      channels;   /*!< Number of channels */
-    uint16_t                     slot_mask;  /*!< Enabled physical slot mask */
-    esp_codec_dev_channel_map_t  map;        /*!< Memory-position to physical slot mapping */
-} esp_codec_dev_data_map_info_t;
 
 /**
  * @brief  Codec capability combination mode
@@ -180,14 +239,19 @@ typedef struct {
 /**
  * @brief  Codec audio sample information
  *
- *         channel_mask filters wanted channels in the driver. When set to 0, all channels are
- *         selected by default. When channel is 2, set bit 0 or bit 1 to select one channel.
- *         When channel is 4, the mask can select one or more channels.
+ *         channel_mask filters wanted channels in the driver. For mapping-aware TDM input, bits
+ *         select physical slots in the original frame described by channel. For mapping-aware TDM
+ *         output, bits select Codec logical channels. Legacy and STD paths retain their existing
+ *         driver-specific interpretation. When set to 0, all channels are selected by default.
+ *
+ *         These fields stay in the application domain: full-duplex coordination may run a wider
+ *         physical frame than channel implies, without changing the channel count or layout seen
+ *         here. Use the data interface get_bus_info() to read the actual bus geometry.
  */
 typedef struct {
     uint8_t   bits_per_sample;  /*!< Bit lengths of one channel data */
     uint8_t   channel;          /*!< Channels of sample */
-    uint16_t  channel_mask;     /*!< Channel mask indicate which channel to be selected */
+    uint16_t  channel_mask;     /*!< Selected input slots or output logical channels for mapping-aware TDM */
     uint32_t  sample_rate;      /*!< Sample rate of sample */
     int       mclk_multiple;    /*!< The multiple of MCLK to the sample rate
                                      If value is 0, mclk = sample_rate * 256

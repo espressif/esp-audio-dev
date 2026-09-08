@@ -190,6 +190,96 @@ static int my_codec_soft_mute(const audio_hw_base_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
+static int my_codec_vad_init(const audio_hw_base_t *h, const esp_audio_hw_vad_cfg_t *cfg)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL || cfg == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    proc->vad_cfg = *cfg;
+    proc->vad_initialized = true;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_enable(const audio_hw_base_t *h, bool enable, bool output_enable)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    proc->vad_enabled = enable;
+    proc->vad_output_enabled = enable && output_enable;
+    proc->vad_has_speech = enable;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_reset(const audio_hw_base_t *h)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    proc->vad_has_speech = false;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_get_status(const audio_hw_base_t *h, esp_audio_hw_vad_status_t *status)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL || status == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    status->has_speech = proc->vad_has_speech;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_set_event_cb(const audio_hw_base_t *h, esp_audio_hw_vad_event_cb_t cb, void *arg)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    proc->vad_event_cb = cb;
+    proc->vad_event_arg = arg;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_get_frame_info(const audio_hw_base_t *h, esp_audio_hw_vad_frame_info_t *info)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL || info == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    info->sample_rate = MY_CODEC_VAD_SAMPLE_RATE;
+    info->bits_per_sample = MY_CODEC_VAD_BITS;
+    info->channel_num = MY_CODEC_VAD_CHANNELS;
+    info->frame_bytes = MY_CODEC_VAD_FRAME_BYTES;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int my_codec_vad_read_frame(const audio_hw_base_t *h, uint8_t *buf, size_t len, size_t *read_len)
+{
+    my_codec_proc_state_t *proc = my_codec_get_mutable_proc_state(h);
+    if (proc == NULL || buf == NULL || read_len == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    *read_len = 0;
+    /* Validate the buffer before the output state, so a caller that gets both wrong still
+     * learns about the buffer. This matches the order the generic layer uses. */
+    if (len < MY_CODEC_VAD_FRAME_BYTES) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (!proc->vad_output_enabled) {
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    /* Deterministic ramp so a test can tell a full frame from a partially filled buffer */
+    for (size_t i = 0; i < MY_CODEC_VAD_FRAME_BYTES; i++) {
+        buf[i] = (uint8_t)i;
+    }
+    *read_len = MY_CODEC_VAD_FRAME_BYTES;
+    return ESP_CODEC_DEV_OK;
+}
+
 static const esp_audio_hw_alc_t my_codec_alc_ops = {
     .init = my_codec_alc_init,
     .set_gain = my_codec_set_alc_gain,
@@ -222,10 +312,21 @@ static const esp_audio_hw_mute_t my_codec_mute_ops = {
     .enable_soft_mute = my_codec_soft_mute,
 };
 
+static const esp_audio_hw_vad_t my_codec_vad_ops = {
+    .init           = my_codec_vad_init,
+    .enable         = my_codec_vad_enable,
+    .reset          = my_codec_vad_reset,
+    .get_status     = my_codec_vad_get_status,
+    .set_event_cb   = my_codec_vad_set_event_cb,
+    .get_frame_info = my_codec_vad_get_frame_info,
+    .read_frame     = my_codec_vad_read_frame,
+};
+
 const esp_audio_hw_proc_ops_t my_codec_hw_proc = {
     .alc  = &my_codec_alc_ops,
     .drc  = &my_codec_drc_ops,
     .eq   = &my_codec_eq_ops,
     .line = &my_codec_line_ops,
     .mute = &my_codec_mute_ops,
+    .vad  = &my_codec_vad_ops,
 };

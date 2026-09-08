@@ -128,6 +128,7 @@ flowchart TB
 | --- | --- |
 | `include/` | 主公开 API：`esp_codec_dev.h`、类型定义、音量接口与默认配置（含 `audio_codec_cfg_t`、`audio_codec_new()`） |
 | `include/impl/` | 扩展接口：UAC 管理与 ADC 数据接口 |
+| `include/codec/` | Codec 驱动共享 helper（`audio_codec_adc_label.h`、`audio_codec_ctrl_ref.h`） |
 | `include/hw_proc/` | 硬件音频处理应用侧头文件（`esp_audio_hw_alc.h` 等） |
 | `interface/` | 控制、数据、GPIO、codec 基类接口、`esp_audio_hw_proc_if.h`，以及共享硬件子配置 `audio_codec_hw_cfg.h` |
 | `device/` | 各芯片驱动及 `device/include/` 配置头 |

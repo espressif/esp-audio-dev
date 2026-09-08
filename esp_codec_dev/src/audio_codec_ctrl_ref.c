@@ -12,24 +12,24 @@
 #include "esp_cpu.h"
 #include "esp_log.h"
 
-#include "codec_ref_mgr.h"
+#include "audio_codec_ctrl_ref.h"
 #include "esp_codec_dev_os.h"
 
-static const char *TAG = "CODEC_REF_MGR";
+static const char *TAG = "ADEV_CTRL_REF";
 
 #define REF_LOCK_TIMEOUT_MS  (1000)
 
 /**
  * @brief  Codec device reference list node
  */
-typedef struct codec_dev_ref_node {
-    audio_codec_ctrl_info_t    info;       /*!< Control interface identity */
-    uint8_t                    ref_count;  /*!< Outstanding open references */
-    struct codec_dev_ref_node *next;       /*!< Next node in the list */
-} codec_dev_ref_node_t;
+typedef struct audio_codec_ctrl_ref_node {
+    audio_codec_ctrl_info_t           info;       /*!< Control interface identity */
+    uint8_t                           ref_count;  /*!< Reference count */
+    struct audio_codec_ctrl_ref_node *next;       /*!< Next node in the list */
+} audio_codec_ctrl_ref_node_t;
 
-static codec_dev_ref_node_t *s_codec_ref_list;
-static esp_codec_dev_mutex_handle_t s_codec_ref_mutex;
+static audio_codec_ctrl_ref_node_t *s_ctrl_ref_list;
+static esp_codec_dev_mutex_handle_t s_ctrl_ref_mutex;
 
 static bool ctrl_info_equal(const audio_codec_ctrl_info_t *a, const audio_codec_ctrl_info_t *b)
 {
@@ -46,10 +46,10 @@ static bool ctrl_info_equal(const audio_codec_ctrl_info_t *a, const audio_codec_
     }
 }
 
-static esp_codec_dev_mutex_handle_t codec_ref_get_mutex(void)
+static esp_codec_dev_mutex_handle_t audio_codec_ctrl_ref_get_mutex(void)
 {
-    if (s_codec_ref_mutex != NULL) {
-        return s_codec_ref_mutex;
+    if (s_ctrl_ref_mutex != NULL) {
+        return s_ctrl_ref_mutex;
     }
 
     esp_codec_dev_mutex_handle_t mutex = esp_codec_dev_mutex_create();
@@ -58,19 +58,19 @@ static esp_codec_dev_mutex_handle_t codec_ref_get_mutex(void)
     }
 
     /* esp_cpu_compare_and_set operates on 32-bit values (32-bit pointer targets). */
-    if (esp_cpu_compare_and_set((volatile uint32_t *)&s_codec_ref_mutex,
+    if (esp_cpu_compare_and_set((volatile uint32_t *)&s_ctrl_ref_mutex,
                                 (uint32_t)NULL,
                                 (uint32_t)mutex)) {
         return mutex;
     }
 
     esp_codec_dev_mutex_destroy(mutex);
-    return s_codec_ref_mutex;
+    return s_ctrl_ref_mutex;
 }
 
-static codec_dev_ref_node_t *codec_ref_mgr_find_node(const audio_codec_ctrl_info_t *info)
+static audio_codec_ctrl_ref_node_t *audio_codec_ctrl_ref_find_node(const audio_codec_ctrl_info_t *info)
 {
-    codec_dev_ref_node_t *p = s_codec_ref_list;
+    audio_codec_ctrl_ref_node_t *p = s_ctrl_ref_list;
     while (p) {
         if (ctrl_info_equal(&p->info, info)) {
             return p;
@@ -80,22 +80,22 @@ static codec_dev_ref_node_t *codec_ref_mgr_find_node(const audio_codec_ctrl_info
     return NULL;
 }
 
-int codec_ref_acquire(const audio_codec_ctrl_info_t *info)
+int audio_codec_ctrl_ref_acquire(const audio_codec_ctrl_info_t *info)
 {
     if (info == NULL) {
         return -1;
     }
-    esp_codec_dev_mutex_handle_t mutex = codec_ref_get_mutex();
+    esp_codec_dev_mutex_handle_t mutex = audio_codec_ctrl_ref_get_mutex();
     if (mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create codec ref list mutex");
+        ESP_LOGE(TAG, "Failed to create codec ctrl ref mutex");
         return -1;
     }
     if (esp_codec_dev_mutex_lock(mutex, REF_LOCK_TIMEOUT_MS) != 0) {
-        ESP_LOGE(TAG, "Failed to lock codec ref list");
+        ESP_LOGE(TAG, "Failed to lock codec ctrl ref list");
         return -1;
     }
     int ref_count = 0;
-    codec_dev_ref_node_t *p = codec_ref_mgr_find_node(info);
+    audio_codec_ctrl_ref_node_t *p = audio_codec_ctrl_ref_find_node(info);
     if (p) {
         if (p->ref_count < UINT8_MAX) {
             p->ref_count++;
@@ -103,37 +103,37 @@ int codec_ref_acquire(const audio_codec_ctrl_info_t *info)
         ref_count = p->ref_count;
         goto unlock;
     }
-    codec_dev_ref_node_t *new_node = (codec_dev_ref_node_t *)calloc(1, sizeof(codec_dev_ref_node_t));
+    audio_codec_ctrl_ref_node_t *new_node = (audio_codec_ctrl_ref_node_t *)calloc(1, sizeof(audio_codec_ctrl_ref_node_t));
     if (new_node == NULL) {
         goto unlock;
     }
     memcpy(&new_node->info, info, sizeof(audio_codec_ctrl_info_t));
     new_node->ref_count = 1;
-    new_node->next = s_codec_ref_list;
-    s_codec_ref_list = new_node;
+    new_node->next = s_ctrl_ref_list;
+    s_ctrl_ref_list = new_node;
     ref_count = 1;
 unlock:
     esp_codec_dev_mutex_unlock(mutex);
     return ref_count > 0 ? ref_count : -1;
 }
 
-int codec_ref_release(const audio_codec_ctrl_info_t *info)
+int audio_codec_ctrl_ref_release(const audio_codec_ctrl_info_t *info)
 {
     if (info == NULL) {
         ESP_LOGE(TAG, "Invalid info");
         return -1;
     }
-    if (s_codec_ref_mutex == NULL) {
-        ESP_LOGE(TAG, "Codec ref list is not initialized");
+    if (s_ctrl_ref_mutex == NULL) {
+        ESP_LOGE(TAG, "Codec ctrl ref list is not initialized");
         return -1;
     }
-    if (esp_codec_dev_mutex_lock(s_codec_ref_mutex, REF_LOCK_TIMEOUT_MS) != 0) {
-        ESP_LOGE(TAG, "Failed to lock codec ref list");
+    if (esp_codec_dev_mutex_lock(s_ctrl_ref_mutex, REF_LOCK_TIMEOUT_MS) != 0) {
+        ESP_LOGE(TAG, "Failed to lock codec ctrl ref list");
         return -1;
     }
     int ref_count = -1;
-    codec_dev_ref_node_t *p = s_codec_ref_list;
-    codec_dev_ref_node_t *prev = NULL;
+    audio_codec_ctrl_ref_node_t *p = s_ctrl_ref_list;
+    audio_codec_ctrl_ref_node_t *prev = NULL;
     while (p) {
         if (ctrl_info_equal(&p->info, info)) {
             if (p->ref_count > 0) {
@@ -144,7 +144,7 @@ int codec_ref_release(const audio_codec_ctrl_info_t *info)
                 if (prev) {
                     prev->next = p->next;
                 } else {
-                    s_codec_ref_list = p->next;
+                    s_ctrl_ref_list = p->next;
                 }
                 free(p);
             }
@@ -154,6 +154,6 @@ int codec_ref_release(const audio_codec_ctrl_info_t *info)
         p = p->next;
     }
 unlock:
-    esp_codec_dev_mutex_unlock(s_codec_ref_mutex);
+    esp_codec_dev_mutex_unlock(s_ctrl_ref_mutex);
     return ref_count;
 }

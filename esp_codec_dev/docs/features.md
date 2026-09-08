@@ -22,7 +22,7 @@ v2.0 各 codec 的配置与驱动迁移进度不一致，完整限制见第 13 �
 | --- | --- | --- |
 | 获取版本 | `esp_codec_dev_get_version()` | 返回组件版本字符串。 |
 | 创建设备 | `esp_codec_dev_new()` | 绑定 `dev_type`、`codec_if`、`data_if`，返回 `esp_codec_dev_handle_t`。 |
-| 打开设备 | `esp_codec_dev_open()` | 校验并规范化 `esp_codec_dev_sample_info_t`，配置 data_if 与 codec，按方向启用 ADC/DAC。 |
+| 打开设备 | `esp_codec_dev_open()` | 校验并规范化副本中的 `esp_codec_dev_sample_info_t`（不回写调用方），配置 data_if 与 codec，按方向启用 ADC/DAC。 |
 | 读取录音数据 | `esp_codec_dev_read()` | 从 data_if 读取；若内存 layout 与硬件不一致，在组件内部做软件重排。 |
 | 写入播放数据 | `esp_codec_dev_write()` | 必要时先做软件音量处理，再通过 data_if 写出。 |
 | 关闭设备 | `esp_codec_dev_close()` | 禁用 data_if，并按策略禁用 ADC/DAC。 |
@@ -31,11 +31,11 @@ v2.0 各 codec 的配置与驱动迁移进度不一致，完整限制见第 13 �
 
 `esp_codec_dev_open()` 使用 `esp_codec_dev_sample_info_t` 描述流格式，主要字段如下：
 
-- `bits_per_sample`：采样位宽，支持 **16 / 24 / 32**。
-- `channel`：通道数；为 0 时默认 **2**。
-- `channel_mask`：启用的通道 mask；为 0 时使用与 `channel` 匹配的默认 mask。
+- `bits_per_sample`：采样位宽，支持 **8 / 16 / 24 / 32**。
+- `channel`：通道数，范围 **1～ESP_CODEC_DEV_MAX_BUS_SLOT**（与 `channel_mask` 位宽一致，上限 16）。packed channel map 仍受 **ESP_CODEC_DEV_MAX_MAP_CHANNELS**（8）限制。
+- `channel_mask`：启用的通道 mask；为 0 时内部使用与 `channel` 匹配的默认 mask，不回写调用方。
 - `sample_rate`：采样率，范围 **8000～192000 Hz**。
-- `mclk_multiple`：MCLK 与采样率倍率；为 0 时默认 **256**；24 bit 且非 3 的倍数时会改为 **384**。
+- `mclk_multiple`：MCLK 与采样率倍率；为 0 时内部默认 **256**；24 bit 且非 3 的倍数时内部改为 **384**，不回写调用方。
 
 I2S mode（STD、TDM、PDM 等）由 data interface 从底层 I2S channel 查询，不要在 `esp_codec_dev_sample_info_t` 中传入。参数校验与报错说明见 [FAQ.md](FAQ.md) 第 1 节。
 
@@ -81,12 +81,13 @@ v2.0 引入 data layout，用于声明**用户内存中 PCM 各通道的排列�
 | 用 label 设置通道映射 | `esp_codec_dev_set_data_layout_label()` | 例如 `"FL,RE,FR"`，按 codec 保存的 ADC label 映射到 channel map。 |
 | 查询当前通道映射 | `esp_codec_dev_get_data_layout()` | 返回当前生效的内存 channel map。 |
 | 用 label 查询映射 | `esp_codec_dev_get_data_layout_label()` | 将当前 map 反解为 ADC label 字符串。 |
-| 构造 channel map | `ESP_CODEC_DEV_CHANNEL_MAP(...)` | 将逻辑声道到物理时隙的映射打包为 `map.value`。 |
+| 构造 channel map | `ESP_CODEC_DEV_CHANNEL_MAP(...)` / `ESP_CODEC_DEV_CHANNEL_MAP_NCH(...)` | 将逻辑声道到物理时隙的映射打包为 `map.value`。不足 8 路时用 `_NCH` 助手，尾部未用位置填 0。 |
 
 layout 由两层 map 信息合成：
 
-- `audio_codec_data_if_t.get_order` / `get_channel_mask`：数据接口根据 `channel` 与 `channel_mask` 计算 bus 侧 map。
+- `audio_codec_data_if_t.get_mode`：数据接口报告当前输入/输出 I2S 模式。
 - `audio_hw_base_t.get_order_list`：codec 驱动声明芯片侧在不同通道数、I2S 模式下的 map。
+- 组件内部由 `(channel, channel_mask)` 计算 bus 侧 data map（`codec_dev_map_from_mask` / `codec_dev_map_to_mask`）。
 
 `esp_codec_dev` 组合上述结果得到最终内存顺序。规则与示例见 [data_layout/data_layout_logic.md](data_layout/data_layout_logic.md)、[data_layout/memory_data_layout.md](data_layout/memory_data_layout.md)。
 
@@ -153,7 +154,7 @@ esp_audio_hw_alc_set_gain(dev, -12.0f);
 - 支持 STD、TDM、PDM TX、PDM RX 模式。
 - 支持 TX/RX 全双工；同一 I2S port 上可多 `data_if` 实例协同。
 - peer 已使用更宽 slot 时，可重配 slot bit width 以对齐。
-- 实现 `get_mode`、`get_fmt`、`get_order`、`get_channel_mask`，参与 data layout 推导。
+- 实现 `get_mode`、`get_fmt`、`get_bus_info`，参与 data layout 推导。
 - 共享端口场景维护 per-port 上下文、互斥与 peer enable 状态。
 
 ### 内部 ADC data interface
@@ -300,7 +301,7 @@ v2.0 将各 codec 公共配置收敛到分组子结构，便于与 `audio_codec_
 | `esp_codec_dev_uac_install()` / `esp_codec_dev_uac_new_dev()` | 安装 UAC 管理器并派生句柄。 |
 | `audio_codec_new_gpio()` | 创建 GPIO 操作接口。 |
 
-外部 codec：实现 `audio_codec_if_t` 与芯片 `*_codec_new()` 后，可直接把 `codec_if` 交给 `esp_codec_dev_new()`；若需走 `audio_codec_new("name", …)`，在文件作用域使用 `AUDIO_CODEC_REGISTER(name, create, cfg_size, build_chip_cfg)` 注册描述符。名称必须是有效且唯一的 C 标识符；内置 codec 同名时以内置实现为准，运行时会打印一条 warning，提示关闭对应的 `CONFIG_CODEC_*_SUPPORT` 以启用注册驱动。描述符在链接期收集，不执行运行时分配，也不支持注销。`cfg_size` 必须非零且不得等于 `sizeof(audio_codec_cfg_t)`（均由编译期断言强制），否则 `audio_codec_new()` 无法区分两种配置形态。`create` 必须把需要的字段拷出 cfg；走 `audio_codec_cfg_t` 路径时临时 chip cfg 在 `create` 返回后立刻释放。
+外部 codec：实现 `audio_codec_if_t` 与芯片 `*_codec_new()` 后，可直接把 `codec_if` 交给 `esp_codec_dev_new()`；若需走 `audio_codec_new("name", …)`，在文件作用域使用 `AUDIO_CODEC_REGISTER(name, create, cfg_size, build_chip_cfg)` 注册描述符。名称必须是有效且唯一的 C 标识符；内置 codec 同名时以内置实现为准，运行时会打印一条 warning，提示关闭对应的 `CONFIG_CODEC_*_SUPPORT` 以启用注册驱动。描述符在链接期收集，不执行运行时分配，也不支持注销。`cfg_size` 必须非零，允许等于 `sizeof(audio_codec_cfg_t)`。同 size 且 `build_chip_cfg` 为 NULL 时直通 `create`；同 size 且提供 builder 时只走 `audio_codec_cfg_t` 路径。`create` 必须把需要的字段拷出 cfg；走 `audio_codec_cfg_t` 路径时临时 chip cfg 在 `create` 返回后立刻释放。
 
 注册描述符所在组件必须完整参与链接。可以在该组件的 `CMakeLists.txt` 中设置：
 
@@ -314,7 +315,7 @@ idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-u audio_codec_desc_my_codec")
 ```
 
-不在 `audio_codec_cfg_t` 内的芯片专属字段应放在芯片 `*_codec_cfg_t` 中，通过 `cfg_size == chip_cfg_size` 直通；`build_chip_cfg` 从 `audio_codec_cfg_t` 构建芯片 cfg（可为 NULL，此时只接受芯片专用 cfg）。
+不在 `audio_codec_cfg_t` 内的芯片专属字段应放在芯片 `*_codec_cfg_t` 中，通过 `cfg_size == chip_cfg_size` 直通；`build_chip_cfg` 从 `audio_codec_cfg_t` 构建芯片 cfg（可为 NULL，此时只接受芯片专用 cfg，若其 size 等于 `audio_codec_cfg_t` 则把入参当作芯片 cfg 直通）。
 
 部分 codec 仍主要通过 `es8311_codec_new()` 等专用构造函数创建；迁移与字段对照见 [api_migration_guide.md](api_migration_guide.md)。
 
@@ -324,7 +325,7 @@ target_link_libraries(${COMPONENT_LIB} INTERFACE "-u audio_codec_desc_my_codec")
 2. `ES8311` 的 `dac_cfg` 已结构化，部分 DAC reference 模式仅区分启用与禁用。
 3. `ES7210` 的 `adc_cfg.digital_mic` 字段当前驱动未消费。
 4. `get_caps` 主要由 ES8311 与 UAC 实现；其他 codec 返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
-5. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_order` / `get_channel_mask`；label API 另外依赖 codec 实现 `get_adc_label`。
+5. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_mode`（用于方向 mode）；slot mask 与 map 的换算由组件内部完成。label API 另外依赖 codec 实现 `get_adc_label`。
 6. 硬件音频处理实际覆盖集中在 ES8311、ES7210、ES8388。
 7. 内置静态表覆盖了全部 Kconfig 可选 codec；UAC 走独立管理器，自定义驱动可通过 `AUDIO_CODEC_REGISTER()` 链接期挂接，或继续调用专用 `*_codec_new()`。
 8. v2.0 硬件实测已覆盖 ES7210、ES7243、ES7243E、ES8311、ES8388、ES8389，以及片上 ADC、USB UAC、I2S PDM TX；其余 codec 与 PDM RX 有待实机验证（见第 10 节）。

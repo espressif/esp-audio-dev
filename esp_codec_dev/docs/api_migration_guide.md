@@ -66,6 +66,8 @@
 | `ESP_CODEC_DEV_WORK_MODE_*` / `esp_codec_dec_work_mode_t` | 已删除 | 方向改由 `esp_codec_dev_cfg_t.dev_type` 与运行时 enable/open 决定 |
 | `include/esp_codec_adc.h` | `include/impl/esp_codec_adc_data.h` | 头文件改名；通过 `esp_codec_dev_defaults.h` 间接包含时为 `esp_codec_adc_data.h` |
 | `include/esp_codec_dev_os.h` | `include/impl/esp_codec_dev_os.h` | 移至 impl，默认不作为应用侧公开路径 |
+| `device/private_inc/codec_ref_mgr.h` | `include/codec/audio_codec_ctrl_ref.h` | Codec 驱动按 ctrl 身份共享芯片；`audio_codec_ctrl_ref_acquire/release` |
+| — | `include/codec/audio_codec_adc_label.h` | Codec 驱动用 `audio_codec_adc_label_parse()` 把 `adc_cfg.label` 转成硬件 MIC mask |
 
 ### 2.3 `esp_codec_dev_types.h` 扩展了 layout/channel map 类型
 
@@ -74,10 +76,9 @@
 - `esp_codec_dev_i2s_mode_t`
 - `esp_codec_dev_channel_map_t`（内存位置 → slot/通道 ID）
 - `esp_codec_dev_device_map_info_t`
-- `esp_codec_dev_data_map_info_t`
 - `esp_codec_dev_caps_mode_t` / `esp_codec_dev_capability_t`
 
-请使用 `ESP_CODEC_DEV_CHANNEL_MAP(...)` 构造 channel map，并通过 `.value` 读写打包值。
+请使用 `ESP_CODEC_DEV_CHANNEL_MAP(...)` 或 `ESP_CODEC_DEV_CHANNEL_MAP_NCH(...)` 构造 channel map，并通过 `.value` 读写打包值。
 
 其他说明：
 
@@ -126,20 +127,19 @@ v2.0 `audio_codec_if_t` 改为组合式结构：
 - 对 `esp_codec_dev` 上层使用者来说，若只通过 `esp_codec_dev_*` API 操作，影响相对较小；若直接操作底层 codec interface，则需要按新模型适配
 - 若代码仅 `#include "audio_codec_if.h"` 后使用 `audio_codec_cfg_t` / `audio_codec_new()`，需改为包含 `esp_codec_dev_defaults.h`；仅使用 `audio_hw_*_cfg_t` 时包含 `audio_codec_hw_cfg.h`（芯片头会间接包含）
 
-### 2.6 `audio_codec_data_if.h` 新增 order/mode/fmt 查询钩子
+### 2.6 `audio_codec_data_if.h` 新增 mode/fmt 查询钩子
 
 相对旧版，新增回调：
 
 - `get_mode`
 - `get_fmt`
-- `get_order`
-- `get_channel_mask`
 
 目的：
 
 - 让 data interface 报告输入/输出 I2S mode
 - 让 data interface 报告当前已打开的流格式（`get_fmt`）
-- 让 data interface 根据 `channel` / `channel_mask` 计算内存位置→slot map，并支持从 map 反解 channel mask
+
+`channel` / `channel_mask` 到内存位置→slot map 的换算由组件内部完成，自定义 data interface 不需要实现 order/mask 计算钩子。
 
 这是 `esp_codec_dev_set_data_layout()`、`esp_codec_dev_get_data_layout()` 以及 label 相关接口能工作的关键前提之一。
 
@@ -360,20 +360,18 @@ v2.0 字段：
 | --- | --- | --- |
 | `master_mode` | `sys_cfg.is_master` | 语义基本等价 |
 | `mclk_div` | `esp_codec_dev_sample_info_t.mclk_multiple` | 从构造参数迁到流参数 |
-| `mic_selected` | `esp_codec_dev_sample_info_t.channel_mask` | 从静态 MIC 选择改为流打开时选择通道 |
+| `mic_selected` | `adc_cfg.label` | 硬件 MIC 使能改由 ADC label 决定；`NA` 表示该槽不使能，空 label 使能全部物理通道 |
 | `mclk_src` | 无 | v2.0 实现固定使用 PAD 作为内部 MCLK 来源 |
 
 ### 语义变化
 
-1. `ES7210` v2.0 实现固定走 TDM 路径  
+1. `ES7210` v2.0 实现固定走 TDM 路径
 打开时直接写 `ES7210_SDP_INTERFACE2_REG12 = 0x02`，并输出 `Enable TDM mode` 日志，不再根据选中 MIC 数量动态切换 STD/TDM。
 
-2. MIC 选择从构造时静态配置改成 `fs->channel_mask`  
-v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enable 路径应用到硬件：
-   - `channel_mask == 0` 时默认选 MIC1 + MIC2
-   - `channel == 4` 时强制使用 `0x0F`
+2. 硬件 MIC 使能由 `adc_cfg.label` 决定
+驱动通过 `audio_codec_adc_label_parse()` 把 label 转成 MIC mask 和 `channel_num`（含 `NA` 的 token 数）。允许的 token 仅为 `FC`/`RE`/`FL`/`FR`/`SL`/`SR`/`BL`/`BR`/`NA`（精确匹配、区分大小写）；其它字符串视为非法。空 label 使能全部物理通道且 `channel_num` 为 0；I2S 读哪些槽仍由 `fs->channel_mask` 决定。
 
-3. `mclk_div` 迁移到 `fs->mclk_multiple`  
+3. `mclk_div` 迁移到 `fs->mclk_multiple`
 旧版是 codec 固定配置；v2.0 按每次 open/set_fs 的流参数决定。
 
 4. 新增了 `adc_cfg`，但 v2.0 实现目前主要验证 `adc_cfg.label`，尚未测试 `adc_cfg.digital_mic`。
@@ -407,7 +405,7 @@ v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enabl
 - `mclk_multiple` 是否替代了原先写在 `codec_cfg` 里的 `mclk_div`
 - 是否调用了已重命名的 `esp_codec_set_disable_when_closed` / `esp_codec_dev_col_calc_hw_gain`
 - I2C 是否已改为传入 `bus_handle`（不再使用 `port`）
-- 自定义 data interface 是否实现了 `get_mode()` / `get_fmt()` / `get_order()`，以便 layout/order 能从底层总线获取实际状态
+- 自定义 data interface 是否实现了 `get_mode()` / `get_fmt()`，以便 layout/order 能从底层总线获取实际状态
 
 ### 4.2 直接实例化 codec 驱动的项目
 
@@ -423,7 +421,8 @@ v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enabl
 
 - 把 `master_mode` 迁到 `sys_cfg.is_master`
 - 删除 `mic_selected/mclk_src/mclk_div`
-- 在 `esp_codec_dev_open()` 的 `fs` 中通过 `channel_mask` 和 `mclk_multiple` 控制实际采集通道与时钟倍率
+- 用 `adc_cfg.label` 声明硬件 MIC 使能（需要时调用 `audio_codec_adc_label_parse()`）
+- 在 `esp_codec_dev_open()` 的 `fs` 中通过 `channel_mask` 和 `mclk_multiple` 控制 I2S 采集槽位与时钟倍率
 
 3. 若使用 `CJC8910` 或其他已迁到子配置的驱动
 
@@ -437,8 +436,6 @@ v2.0 实现会在 `set_fs()` 中读取 `channel_mask`，并在后续 start/enabl
 - `audio_codec_ctrl_if_t.get_info`（且 I2C 信息使用 `bus_handle`）
 - `audio_codec_data_if_t.get_mode`
 - `audio_codec_data_if_t.get_fmt`
-- `audio_codec_data_if_t.get_order`
-- `audio_codec_data_if_t.get_channel_mask`
 - `audio_hw_base_t.get_order_list`
 
 如果这些接口不实现：
@@ -527,6 +524,7 @@ es7210_codec_cfg_t cfg = {
     },
     .adc_cfg = {
         .digital_mic = false,
+        .label = "FL,FR",
     },
 };
 

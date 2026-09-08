@@ -18,6 +18,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_codec_dev_vol.h"
 #include "es7210_proc_priv.h"
+#include "audio_codec_adc_label.h"
 
 static const char *TAG = "ES7210";
 
@@ -32,7 +33,7 @@ typedef struct {
     bool                 enabled;                                /*!< True when ADC path is running */
     es7210_gain_value_t  gain;                                   /*!< Cached gain setting */
     uint8_t              off_reg;                                /*!< Register offset for channel map */
-    uint16_t             channel_mask;                           /*!< Channel mask from fs->channel_mask */
+    uint16_t             channel_mask;                           /*!< Hardware MIC mask; NULL/empty label is 0xFFFF */
     char                 adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
 } audio_codec_es7210_t;
 
@@ -123,25 +124,21 @@ static const esp_audio_hw_proc_ops_t hw_proc = {
     .mute = &es7210_mute_ops,
 };
 
+/* TDM frames group the odd channels ahead of the even ones, whatever the frame is wide. Rows past
+   four slots describe where the channels sit in that frame, not extra microphones. */
 static const esp_codec_dev_device_map_info_t order_info[] = {
-    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0)}},
+    {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
-static const esp_codec_dev_capability_t adc_caps = {
-    .dev_type = ESP_CODEC_DEV_TYPE_IN,
-    .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
-    .flexible = {
-        .max_channels = 4,
-        .bits_per_sample = (const uint8_t[]){ 16, 24, 32 },
-        .bits_num = 3,
-        .sample_rates = (const uint32_t[]){
-            8000, 11025, 12000, 16000, 22050, 24000,
-            32000, 44100, 48000, 64000, 88200, 96000,
-        },
-        .sample_rate_num = 12,
-    },
+static const uint8_t es7210_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es7210_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000,
+    32000, 44100, 48000, 64000, 88200, 96000,
 };
 
 static int es7210_write_reg(audio_codec_es7210_t *codec, int reg, int value)
@@ -248,8 +245,8 @@ static int es7210_select_mics(audio_codec_es7210_t *codec, uint16_t channel_mask
             ret |= es7210_update_reg_bit(codec, ES7210_MIC4_GAIN_REG46, 0x10, 0x10);
         }
     } else {
-        ESP_LOGE(TAG, "Microphone selection error");
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "Channel mask 0x%x selects no microphone", channel_mask);
+        return ESP_CODEC_DEV_NOT_SUPPORT;
     }
 
     return (ret == ESP_CODEC_DEV_OK) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
@@ -497,8 +494,6 @@ static int es7210_open(const audio_hw_base_t *h, void *cfg, int cfg_size)
     /* Set the frequency division coefficient and use dll except clock doubler, and need to set 0xc1 to clear the state */
     ret |= es7210_write_reg(codec, ES7210_MAINCLK_REG02, 0xc1);
 
-    // Default channel_mask to MIC1 and MIC2 (will be updated in set_fs)
-    codec->channel_mask = 0x03;
     ret |= es7210_select_mics(codec, codec->channel_mask);
     ret |= _es7210_set_channel_gain(codec, 0x0F, 30.0);
     if (ret != 0) {
@@ -540,22 +535,6 @@ static int es7210_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t *
     int ret = 0;
     uint8_t bits = fs->bits_per_sample;
     uint16_t mclk_div = fs->mclk_multiple ? fs->mclk_multiple : MCLK_DEFAULT_DIV;
-
-    // Update channel_mask from fs
-    uint16_t new_mask = fs->channel_mask;
-    if (new_mask == 0) {
-        // Default to MIC1 and MIC2 if no mask specified
-        new_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
-    }
-
-    if (fs->channel >= 4) {
-        new_mask = 0x0F;
-    }
-
-    // Reconfigure MICs if channel_mask changed
-    if (new_mask != codec->channel_mask) {
-        codec->channel_mask = new_mask;
-    }
 
     if (fs->channel == 2 && bits == 32) {
         ESP_LOGW(TAG, "Use 32bit to get 2ch 16bit data, not recommended, can use 4ch 16bit instead");
@@ -662,6 +641,17 @@ static int es7210_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         *count = 1;
         return ESP_CODEC_DEV_OK;
     }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 4,
+            .bits_per_sample = es7210_cap_bits,
+            .bits_num = sizeof(es7210_cap_bits) / sizeof(es7210_cap_bits[0]),
+            .sample_rates = es7210_cap_rates,
+            .sample_rate_num = sizeof(es7210_cap_rates) / sizeof(es7210_cap_rates[0]),
+        },
+    };
     caps[0] = adc_caps;
     *count = 1;
     return ESP_CODEC_DEV_OK;
@@ -674,6 +664,18 @@ static void es7210_save_adc_label(audio_codec_es7210_t *codec, const char *label
         strncpy(codec->adc_label, label, sizeof(codec->adc_label) - 1);
         codec->adc_label[sizeof(codec->adc_label) - 1] = '\0';
     }
+}
+
+static int es7210_apply_adc_label_mic_select(audio_codec_es7210_t *codec, const char *label)
+{
+    uint16_t mic_mask = 0;
+    int ret = audio_codec_adc_label_parse(label, &mic_mask, NULL);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Invalid ADC label");
+        return ret;
+    }
+    codec->channel_mask = mic_mask;
+    return ESP_CODEC_DEV_OK;
 }
 
 const audio_codec_if_t *es7210_codec_new(es7210_codec_cfg_t *codec_cfg)
@@ -711,6 +713,10 @@ const audio_codec_if_t *es7210_codec_new(es7210_codec_cfg_t *codec_cfg)
     codec->base.hw_proc = &hw_proc;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     es7210_save_adc_label(codec, codec_cfg->adc_cfg.label);
+    if (es7210_apply_adc_label_mic_select(codec, codec_cfg->adc_cfg.label) != ESP_CODEC_DEV_OK) {
+        free(codec);
+        return NULL;
+    }
 
     codec->adc_ops.ops.enable = es7210_enable;
     codec->adc_ops.ops.mute = es7210_adc_mute;

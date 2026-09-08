@@ -138,6 +138,41 @@ static void test_codec_dev_using_adc_mic(void)
     }
     play_opened = true;
 
+    if (pdm_data_if->get_bus_info == NULL) {
+        fail_msg = "PDM data_if missing get_bus_info";
+        goto cleanup;
+    }
+    esp_codec_dev_bus_info_t unused_bus = {0};
+    ret = pdm_data_if->get_bus_info(pdm_data_if, ESP_CODEC_DEV_TYPE_OUT, &unused_bus);
+    if (ret != ESP_CODEC_DEV_WRONG_STATE) {
+        ESP_LOGE(TAG, "PDM get_bus_info expected WRONG_STATE, got %d", ret);
+        fail_msg = "PDM get_bus_info did not return WRONG_STATE";
+        goto cleanup;
+    }
+    if (pdm_data_if->set_fmt == NULL) {
+        fail_msg = "PDM data_if missing set_fmt";
+        goto cleanup;
+    }
+    esp_codec_dev_sample_info_t pdm_fs = {0};
+    ret = pdm_data_if->get_fmt(pdm_data_if, ESP_CODEC_DEV_TYPE_OUT, &pdm_fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Get C3 Lyra PDM format failed: %d", ret);
+        fail_msg = "failed to get PDM speaker format";
+        goto cleanup;
+    }
+    ret = pdm_data_if->set_fmt(pdm_data_if, ESP_CODEC_DEV_TYPE_OUT, &pdm_fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Reapply C3 Lyra PDM format failed: %d", ret);
+        fail_msg = "failed to reapply PDM speaker format";
+        goto cleanup;
+    }
+    ret = pdm_data_if->get_bus_info(pdm_data_if, ESP_CODEC_DEV_TYPE_OUT, &unused_bus);
+    if (ret != ESP_CODEC_DEV_WRONG_STATE) {
+        ESP_LOGE(TAG, "PDM get_bus_info after reapply expected WRONG_STATE, got %d", ret);
+        fail_msg = "PDM reapply committed unexpected bus info";
+        goto cleanup;
+    }
+
     ret = esp_codec_dev_set_out_vol(play_dev, TEST_CODEC_BOARD_OUT_VOL);
     if (ret != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Set C3 Lyra PDM speaker volume failed after open: %d", ret);

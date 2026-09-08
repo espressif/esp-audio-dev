@@ -128,6 +128,7 @@ flowchart TB
 | --- | --- |
 | `include/` | Main public API: `esp_codec_dev.h`, type definitions, volume API, and default configuration (`audio_codec_cfg_t`, `audio_codec_new()`) |
 | `include/impl/` | Extended interfaces: UAC manager and ADC data interface |
+| `include/codec/` | Shared codec-driver helpers (`audio_codec_adc_label.h`, `audio_codec_ctrl_ref.h`) |
 | `include/hw_proc/` | Hardware audio processing API headers (`esp_audio_hw_alc.h` and related) |
 | `interface/` | Control, data, GPIO, codec base interfaces, `esp_audio_hw_proc_if.h`, and shared hardware sub-config `audio_codec_hw_cfg.h` |
 | `device/` | Per-chip drivers and `device/include/` chip headers |

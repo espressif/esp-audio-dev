@@ -34,14 +34,14 @@ static void test_data_convert_in_place_expand_should_keep_all_frames(void)
     codec_dev_data_cvt_info_t src = {
         .data = buf,
         .len = 8,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = buf,
         .len = 16,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 3, 4, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 2, 3, 4)},
         .bits = 16,
         .ch_num = 4,
     };
@@ -68,14 +68,14 @@ static void test_data_convert_should_reject_non_frame_aligned_src_length(void)
     codec_dev_data_cvt_info_t src = {
         .data = src_buf,
         .len = 6,  // not multiple of frame_size(2ch*2B=4)
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = dst_buf,
         .len = 16,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
@@ -90,14 +90,14 @@ static void test_data_convert_should_reject_duplicate_order_digits(void)
     codec_dev_data_cvt_info_t src = {
         .data = src_buf,
         .len = 8,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 1, 0, 0, 0, 0, 0, 0)},  // duplicate channel ID
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 1)},  // duplicate channel ID
         .bits = 16,
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = dst_buf,
         .len = 8,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
@@ -112,14 +112,14 @@ static void test_data_convert_should_reject_unsupported_bit_depth(void)
     codec_dev_data_cvt_info_t src = {
         .data = src_buf,
         .len = 8,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 20,  // unsupported
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = dst_buf,
         .len = 8,
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
@@ -140,14 +140,14 @@ static void test_data_convert_should_select_channels_and_reorder_from_4ch_to_2ch
     codec_dev_data_cvt_info_t src = {
         .data = (uint8_t *)src_pcm,
         .len = sizeof(src_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)},
         .bits = 16,
         .ch_num = 4,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = (uint8_t *)dst_pcm,
         .len = sizeof(dst_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(2, 1, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1)},
         .bits = 16,
         .ch_num = 2,
     };
@@ -174,14 +174,14 @@ static void test_data_convert_should_downmix_channels_and_bit_depth_24_to_16(voi
     codec_dev_data_cvt_info_t src = {
         .data = src_buf,
         .len = sizeof(src_buf),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 3, 4, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 2, 3, 4)},
         .bits = 24,
         .ch_num = 4,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = (uint8_t *)dst_pcm,
         .len = sizeof(dst_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(4, 1, 0, 0, 0, 0, 0, 0)},  // output ch4 then ch1
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(4, 1)},  // output ch4 then ch1
         .bits = 16,
         .ch_num = 2,
     };
@@ -202,14 +202,14 @@ static void test_data_convert_should_fill_zero_for_missing_destination_channels(
     codec_dev_data_cvt_info_t src = {
         .data = (uint8_t *)src_pcm,
         .len = sizeof(src_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 16,
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = (uint8_t *)dst_pcm,
         .len = sizeof(dst_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 3, 4, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 2, 3, 4)},
         .bits = 16,
         .ch_num = 4,
     };
@@ -230,14 +230,14 @@ static void test_data_convert_should_support_8bit_reorder_and_zero_fill(void)
     codec_dev_data_cvt_info_t src = {
         .data = (uint8_t *)src_pcm,
         .len = sizeof(src_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 2, 0, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)},
         .bits = 8,
         .ch_num = 2,
     };
     codec_dev_data_cvt_info_t dst = {
         .data = (uint8_t *)dst_pcm,
         .len = sizeof(dst_pcm),
-        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP(3, 2, 1, 0, 0, 0, 0, 0)},
+        .map = {.value = ESP_CODEC_DEV_CHANNEL_MAP_3CH(3, 2, 1)},
         .bits = 8,
         .ch_num = 3,
     };

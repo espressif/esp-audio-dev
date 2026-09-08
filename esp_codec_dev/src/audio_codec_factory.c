@@ -5,6 +5,7 @@
  * See LICENSE file for details.
  */
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -231,6 +232,19 @@ static const audio_codec_desc_t *find_codec(const char *name)
     return find_registered_codec(name);
 }
 
+static const audio_codec_if_t *create_from_shared_cfg(const audio_codec_desc_t *entry, const void *codec_cfg)
+{
+    void *chip_cfg = calloc(1, entry->chip_cfg_size);
+    if (chip_cfg == NULL) {
+        ESP_LOGE(TAG, "No mem for %s configuration", entry->name);
+        return NULL;
+    }
+    entry->build_chip_cfg((const audio_codec_cfg_t *)codec_cfg, chip_cfg);
+    const audio_codec_if_t *codec_if = entry->create(chip_cfg);
+    free(chip_cfg);
+    return codec_if;
+}
+
 const audio_codec_if_t *audio_codec_new(const char *codec_name, const void *codec_cfg, int cfg_size)
 {
     if (codec_name == NULL || codec_cfg == NULL) {
@@ -247,28 +261,14 @@ const audio_codec_if_t *audio_codec_new(const char *codec_name, const void *code
         ESP_LOGE(TAG, "Malformed descriptor for codec: %s", codec_name);
         return NULL;
     }
-    if (entry->chip_cfg_size == sizeof(audio_codec_cfg_t)) {
-        ESP_LOGE(TAG, "Ambiguous descriptor for %s: chip cfg size equals audio_codec_cfg_t",
-                 codec_name);
-        return NULL;
-    }
 
-    /* Chip-specific configuration: pass through directly. */
-    if (cfg_size == (int)entry->chip_cfg_size) {
+    const bool is_shared = (cfg_size == (int)sizeof(audio_codec_cfg_t));
+    const bool is_chip = (cfg_size == (int)entry->chip_cfg_size);
+    if (is_shared && entry->build_chip_cfg != NULL) {
+        return create_from_shared_cfg(entry, codec_cfg);
+    }
+    if (is_chip) {
         return entry->create((void *)codec_cfg);
-    }
-
-    /* Shared audio_codec_cfg_t: build chip-specific cfg then construct. */
-    if (cfg_size == (int)sizeof(audio_codec_cfg_t) && entry->build_chip_cfg != NULL) {
-        void *chip_cfg = calloc(1, entry->chip_cfg_size);
-        if (chip_cfg == NULL) {
-            ESP_LOGE(TAG, "No mem for %s configuration", codec_name);
-            return NULL;
-        }
-        entry->build_chip_cfg((const audio_codec_cfg_t *)codec_cfg, chip_cfg);
-        const audio_codec_if_t *codec_if = entry->create(chip_cfg);
-        free(chip_cfg);
-        return codec_if;
     }
 
     ESP_LOGE(TAG, "Invalid %s configuration size %d, expected %d%s",

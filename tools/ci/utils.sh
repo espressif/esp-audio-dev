@@ -3,6 +3,11 @@
 : "${ADF_PATH:=${PROJECT_ROOT}}"
 export ADF_PATH
 
+# GitHub prefix kept by upstream submodules nested inside esp-idf (e.g. CMock -> unity / cexception).
+: "${CI_GITHUB_URL_PREFIX=https://github.com/}"
+# Mirror replacing ${CI_GITHUB_URL_PREFIX} while fetching esp-idf submodules; set empty to use github.com.
+: "${CI_GITHUB_MIRROR_PREFIX=https://jihulab.com/esp-mirror/}"
+
 function add_ssh_keys() {
   local key_string="${1}"
   mkdir -p ~/.ssh
@@ -39,7 +44,11 @@ function add_doc_server_ssh_keys() {
 
 function configure_ci_env() {
   source $IDF_PATH/tools/ci/utils.sh
-  is_based_on_commits $REQUIRED_ANCESTOR_COMMITS
+  if declare -F is_based_on_commits >/dev/null 2>&1; then
+    is_based_on_commits ${REQUIRED_ANCESTOR_COMMITS:-}
+  else
+    warning "Skip is_based_on_commits (not in this IDF tools/ci/utils.sh)"
+  fi
 
   if [[ -n "$IDF_DONT_USE_MIRRORS" ]]; then
     export IDF_MIRROR_PREFIX_MAP=
@@ -419,7 +428,13 @@ function fetch_idf_branch() {
   if [[ "${CI_IDF_SUBMODULE_USE_ARCHIVES:-0}" == "1" ]]; then
     python "${CI_TOOLS_PATH}/ci/git/ci_fetch_submodule.py" -s all
   else
-    git submodule update --init --recursive --depth 1
+    local -a submodule_git_opts=()
+    if [[ -n "${CI_GITHUB_MIRROR_PREFIX}" ]]; then
+      # 'git -c' reaches nested submodule clones through GIT_CONFIG_PARAMETERS, unlike repo-local config
+      submodule_git_opts+=(-c "url.${CI_GITHUB_MIRROR_PREFIX}.insteadOf=${CI_GITHUB_URL_PREFIX}")
+      info "mirror submodule remotes: ${CI_GITHUB_URL_PREFIX} -> ${CI_GITHUB_MIRROR_PREFIX}"
+    fi
+    git "${submodule_git_opts[@]}" submodule update --init --recursive --depth 1
   fi
   popd >/dev/null
 }

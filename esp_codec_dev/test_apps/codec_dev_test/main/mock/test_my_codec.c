@@ -20,6 +20,7 @@
 #include "esp_audio_hw_eq.h"
 #include "esp_audio_hw_line.h"
 #include "esp_audio_hw_mute.h"
+#include "esp_audio_hw_vad.h"
 
 // Customized volume curve taken from android framework
 static esp_codec_dev_vol_map_t volume_maps[] = {
@@ -28,6 +29,14 @@ static esp_codec_dev_vol_map_t volume_maps[] = {
     {.vol = 66, .db_value = -17.0},
     {.vol = 100, .db_value = 0.0},
 };
+
+static void test_vad_event_cb(bool has_speech, void *arg)
+{
+    bool *seen = (bool *)arg;
+    if (seen != NULL) {
+        *seen = has_speech;
+    }
+}
 
 /**
  * Test case for esp_codec_dev API using customized interface
@@ -499,6 +508,8 @@ static void test_audio_codec_new_common_api(void)
     };
     esp_audio_hw_auto_mute_cfg_t amute_cfg = ESP_AUDIO_HW_AUTO_MUTE_CFG_DEFAULT();
     esp_audio_hw_soft_mute_cfg_t smute_cfg = ESP_AUDIO_HW_SOFT_MUTE_CFG_DEFAULT();
+    esp_audio_hw_vad_cfg_t vad_cfg = ESP_AUDIO_HW_VAD_CFG_DEFAULT();
+    esp_audio_hw_vad_status_t vad_status = {0};
 
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_alc_init(dev, &alc_cfg));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_alc_set_gain(dev, 0.0f));
@@ -507,6 +518,10 @@ static void test_audio_codec_new_common_api(void)
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_line_enable_in(dev, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_auto_mute_set_cfg(dev, &amute_cfg));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_soft_mute_set_cfg(dev, &smute_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_vad_init(dev, &vad_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_vad_get_status(dev, &vad_status));
+    esp_audio_hw_vad_frame_info_t vad_info = {0};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_vad_get_frame_info(dev, &vad_info));
 
     /* Pure data path (no codec_if) also returns NOT_SUPPORT */
     esp_codec_dev_delete(dev);
@@ -519,6 +534,7 @@ static void test_audio_codec_new_common_api(void)
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_line_enable_out(dev, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_auto_mute_enable(dev, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_soft_mute_enable(dev, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_audio_hw_vad_enable(dev, true, true));
 
     esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);
@@ -534,8 +550,27 @@ static void my_codec_build_chip_cfg(const audio_codec_cfg_t *cfg, void *chip_cfg
     out->hw_gain = cfg->pa_cfg.hw_gain;
 }
 
+static const audio_codec_if_t *my_codec_create_from_shared(void *cfg)
+{
+    const audio_codec_cfg_t *in = (const audio_codec_cfg_t *)cfg;
+    my_codec_cfg_t chip = {
+        .ctrl_if = in->ctrl_if,
+        .gpio_if = in->gpio_if,
+        .hw_gain = in->pa_cfg.hw_gain,
+    };
+    return my_codec_new(&chip);
+}
+
+static void my_codec_build_shared_identity(const audio_codec_cfg_t *cfg, void *chip_cfg)
+{
+    memcpy(chip_cfg, cfg, sizeof(*cfg));
+}
+
 AUDIO_CODEC_REGISTER(my_codec, my_codec_new, sizeof(my_codec_cfg_t), my_codec_build_chip_cfg);
 AUDIO_CODEC_REGISTER(my_codec_nobuild, my_codec_new, sizeof(my_codec_cfg_t), NULL);
+AUDIO_CODEC_REGISTER(my_codec_shared_size, my_codec_create_from_shared, sizeof(audio_codec_cfg_t), NULL);
+AUDIO_CODEC_REGISTER(my_codec_shared_build, my_codec_create_from_shared, sizeof(audio_codec_cfg_t),
+                     my_codec_build_shared_identity);
 #ifdef CONFIG_CODEC_DUMMY_SUPPORT
 AUDIO_CODEC_REGISTER(dummy, my_codec_new, sizeof(my_codec_cfg_t), NULL);
 #endif  /* CONFIG_CODEC_DUMMY_SUPPORT */
@@ -565,6 +600,15 @@ static void test_audio_codec_link_registry(void)
 
     TEST_ASSERT_NULL(audio_codec_new("my_codec_nobuild", &common_cfg, sizeof(common_cfg)));
     codec_if = audio_codec_new("my_codec_nobuild", &chip_cfg, sizeof(chip_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+
+    codec_if = audio_codec_new("my_codec_shared_size", &common_cfg, sizeof(common_cfg));
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
+    TEST_ASSERT_NULL(audio_codec_new("my_codec_shared_size", &chip_cfg, sizeof(chip_cfg)));
+
+    codec_if = audio_codec_new("my_codec_shared_build", &common_cfg, sizeof(common_cfg));
     TEST_ASSERT_NOT_NULL(codec_if);
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, audio_codec_delete_codec_if(codec_if));
 
@@ -673,6 +717,71 @@ static void test_esp_codec_dev_hw_proc_api(void)
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_soft_mute_enable(dev, true));
     TEST_ASSERT_EQUAL(true, proc->soft_mute_enabled);
 
+    esp_audio_hw_vad_cfg_t vad_cfg = ESP_AUDIO_HW_VAD_CFG_DEFAULT();
+    vad_cfg.sample_rate = 16000;
+    vad_cfg.channel_num = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_init(dev, &vad_cfg));
+    TEST_ASSERT_TRUE(proc->vad_initialized);
+    TEST_ASSERT_EQUAL(vad_cfg.sample_rate, proc->vad_cfg.sample_rate);
+    TEST_ASSERT_EQUAL(vad_cfg.channel_num, proc->vad_cfg.channel_num);
+
+    bool vad_event_seen = false;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_set_event_cb(dev, test_vad_event_cb, &vad_event_seen));
+    TEST_ASSERT_NOT_NULL(proc->vad_event_cb);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_enable(dev, true, true));
+    TEST_ASSERT_TRUE(proc->vad_enabled);
+    TEST_ASSERT_TRUE(proc->vad_output_enabled);
+    TEST_ASSERT_FALSE(vad_event_seen);
+
+    esp_audio_hw_vad_status_t vad_status = {0};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_get_status(dev, &vad_status));
+    TEST_ASSERT_TRUE(vad_status.has_speech);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_reset(dev));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_get_status(dev, &vad_status));
+    TEST_ASSERT_FALSE(vad_status.has_speech);
+
+    /* A caller must be able to size its buffer from the reported format alone */
+    esp_audio_hw_vad_frame_info_t vad_info = {0};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_get_frame_info(dev, &vad_info));
+    TEST_ASSERT_EQUAL(MY_CODEC_VAD_SAMPLE_RATE, vad_info.sample_rate);
+    TEST_ASSERT_EQUAL(MY_CODEC_VAD_BITS, vad_info.bits_per_sample);
+    TEST_ASSERT_EQUAL(MY_CODEC_VAD_CHANNELS, vad_info.channel_num);
+    TEST_ASSERT_EQUAL(MY_CODEC_VAD_FRAME_BYTES, vad_info.frame_bytes);
+    /* The reported format must be self-consistent: a frame holds whole samples */
+    size_t vad_sample_bytes = (size_t)(vad_info.bits_per_sample / 8) * vad_info.channel_num;
+    TEST_ASSERT_NOT_EQUAL(0, vad_sample_bytes);
+    TEST_ASSERT_EQUAL(0, vad_info.frame_bytes % vad_sample_bytes);
+
+    uint8_t *vad_frame = (uint8_t *)calloc(1, vad_info.frame_bytes);
+    TEST_ASSERT_NOT_NULL(vad_frame);
+    size_t vad_read_len = 0;
+    /* A buffer sized exactly to frame_bytes is enough */
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_read_frame(dev, vad_frame, vad_info.frame_bytes, &vad_read_len));
+    TEST_ASSERT_EQUAL(vad_info.frame_bytes, vad_read_len);
+    for (size_t i = 0; i < vad_info.frame_bytes; i++) {
+        TEST_ASSERT_EQUAL_UINT8((uint8_t)i, vad_frame[i]);
+    }
+    /* One byte short must fail without a partial frame */
+    vad_read_len = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      esp_audio_hw_vad_read_frame(dev, vad_frame, vad_info.frame_bytes - 1, &vad_read_len));
+    TEST_ASSERT_EQUAL(0, vad_read_len);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_enable(dev, false, false));
+    TEST_ASSERT_FALSE(proc->vad_enabled);
+    /* Reading with filtered-audio output disabled must fail and report no data */
+    TEST_ASSERT_FALSE(proc->vad_output_enabled);
+    vad_read_len = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      esp_audio_hw_vad_read_frame(dev, vad_frame, vad_info.frame_bytes, &vad_read_len));
+    TEST_ASSERT_EQUAL(0, vad_read_len);
+    /* The format stays queryable regardless of the enable state */
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_get_frame_info(dev, &vad_info));
+    TEST_ASSERT_EQUAL(MY_CODEC_VAD_FRAME_BYTES, vad_info.frame_bytes);
+    free(vad_frame);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_OK, esp_audio_hw_vad_set_event_cb(dev, NULL, NULL));
+    TEST_ASSERT_NULL(proc->vad_event_cb);
+
     esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);
     audio_codec_delete_ctrl_if(ctrl_if);
@@ -715,6 +824,23 @@ static void test_esp_codec_dev_hw_proc_wrong_arg(void)
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_auto_mute_enable(NULL, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_auto_mute_set_cfg(NULL, NULL));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_soft_mute_set_cfg(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_init(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_init(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_enable(NULL, true, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_get_status(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_get_frame_info(NULL, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_get_frame_info(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_read_frame(dev, NULL, 0, NULL));
+
+    /* read_len must be cleared even when the buffer is rejected up front */
+    uint8_t vad_frame[MY_CODEC_VAD_FRAME_BYTES] = {0};
+    size_t vad_read_len = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      esp_audio_hw_vad_read_frame(NULL, vad_frame, sizeof(vad_frame), &vad_read_len));
+    TEST_ASSERT_EQUAL(0, vad_read_len);
+    vad_read_len = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_audio_hw_vad_read_frame(dev, vad_frame, 0, &vad_read_len));
+    TEST_ASSERT_EQUAL(0, vad_read_len);
 
     codec_if->hw_base.close(&codec_if->hw_base);
 
@@ -732,6 +858,17 @@ static void test_esp_codec_dev_hw_proc_wrong_arg(void)
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_line_enable_in(dev, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_auto_mute_enable(dev, true));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_soft_mute_enable(dev, true));
+    esp_audio_hw_vad_cfg_t vad_cfg = ESP_AUDIO_HW_VAD_CFG_DEFAULT();
+    esp_audio_hw_vad_status_t vad_status = {0};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_vad_init(dev, &vad_cfg));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_vad_enable(dev, true, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_vad_get_status(dev, &vad_status));
+    esp_audio_hw_vad_frame_info_t vad_info = {0};
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_audio_hw_vad_get_frame_info(dev, &vad_info));
+    vad_read_len = 1;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      esp_audio_hw_vad_read_frame(dev, vad_frame, sizeof(vad_frame), &vad_read_len));
+    TEST_ASSERT_EQUAL(0, vad_read_len);
 
     esp_codec_dev_delete(dev);
     audio_codec_delete_codec_if(codec_if);

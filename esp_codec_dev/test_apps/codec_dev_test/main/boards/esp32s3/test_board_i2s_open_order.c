@@ -5,6 +5,7 @@
  * See LICENSE file for details.
  */
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -374,6 +375,157 @@ static int close_record(codec_case_ctx_t *ctx)
     return esp_codec_dev_close(ctx->record_inst.codec_dev);
 }
 
+static int read_direction_bus(const audio_codec_data_if_t *data_if, esp_codec_dev_type_t dev_type,
+                              esp_codec_dev_bus_info_t *bus)
+{
+    if (data_if == NULL || data_if->get_bus_info == NULL || bus == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    return data_if->get_bus_info(data_if, dev_type, bus);
+}
+
+static inline bool bus_geometry_valid(const esp_codec_dev_bus_info_t *bus)
+{
+    if (bus == NULL || bus->total_slot == 0 || bus->slot_bit == 0 || bus->data_bit == 0 ||
+        bus->data_bit > bus->slot_bit || bus->total_frame_bits != bus->total_slot * bus->slot_bit) {
+        return false;
+    }
+    if (bus->mode == ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS && bus->total_slot != 2) {
+        return false;
+    }
+    uint16_t valid_slot_mask =
+        bus->total_slot >= 16 ? UINT16_MAX : (uint16_t)((1U << bus->total_slot) - 1U);
+    return bus->slot_mask != 0 && (bus->slot_mask & ~valid_slot_mask) == 0;
+}
+
+static int check_shared_clocks(const esp_codec_dev_bus_info_t *tx_bus, const esp_codec_dev_bus_info_t *rx_bus)
+{
+    if (tx_bus == NULL || rx_bus == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (!bus_geometry_valid(tx_bus) || !bus_geometry_valid(rx_bus)) {
+        ESP_LOGE(TAG, "Invalid bus geometry: TX total/slot/data/mask=%u/%u/%u/0x%x "
+                      "RX total/slot/data/mask=%u/%u/%u/0x%x",
+                 tx_bus->total_slot, tx_bus->slot_bit, tx_bus->data_bit, tx_bus->slot_mask,
+                 rx_bus->total_slot, rx_bus->slot_bit, rx_bus->data_bit, rx_bus->slot_mask);
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    if (tx_bus->sample_rate != rx_bus->sample_rate ||
+        tx_bus->mclk_multiple != rx_bus->mclk_multiple ||
+        tx_bus->total_frame_bits != rx_bus->total_frame_bits) {
+        ESP_LOGE(TAG, "Shared clocks mismatch: rate=%" PRIu32 "/%" PRIu32 " mclk=%d/%d frame=%u/%u",
+                 tx_bus->sample_rate, rx_bus->sample_rate, tx_bus->mclk_multiple, rx_bus->mclk_multiple,
+                 tx_bus->total_frame_bits, rx_bus->total_frame_bits);
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    return ESP_CODEC_DEV_OK;
+}
+
+static int check_duplex_buses(codec_case_ctx_t *ctx)
+{
+    esp_codec_dev_bus_info_t tx_bus = {0};
+    esp_codec_dev_bus_info_t rx_bus = {0};
+    int ret = read_direction_bus(ctx->play_inst.data_if, ESP_CODEC_DEV_TYPE_OUT, &tx_bus);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    ret = read_direction_bus(ctx->record_inst.data_if, ESP_CODEC_DEV_TYPE_IN, &rx_bus);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    return check_shared_clocks(&tx_bus, &rx_bus);
+}
+
+/**
+ * After only one direction is opened, the peer has a committed bus only when the idle-clock-peer
+ * path ran (peer channel is an initialized master). A slave peer stays on active-only and
+ * get_bus_info returns WRONG_STATE until that direction is opened — treat that as expected.
+ */
+static int check_buses_after_first_open(codec_case_ctx_t *ctx, esp_codec_dev_type_t opened_type,
+                                        bool expect_peer_bus)
+{
+    esp_codec_dev_bus_info_t active_bus = {0};
+    esp_codec_dev_bus_info_t peer_bus = {0};
+    const audio_codec_data_if_t *active_if = NULL;
+    const audio_codec_data_if_t *peer_if = NULL;
+    esp_codec_dev_type_t peer_type = ESP_CODEC_DEV_TYPE_NONE;
+
+    if (ctx == NULL ||
+        (opened_type != ESP_CODEC_DEV_TYPE_OUT && opened_type != ESP_CODEC_DEV_TYPE_IN)) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (opened_type == ESP_CODEC_DEV_TYPE_OUT) {
+        active_if = ctx->play_inst.data_if;
+        peer_if = ctx->record_inst.data_if;
+        peer_type = ESP_CODEC_DEV_TYPE_IN;
+    } else {
+        active_if = ctx->record_inst.data_if;
+        peer_if = ctx->play_inst.data_if;
+        peer_type = ESP_CODEC_DEV_TYPE_OUT;
+    }
+
+    int ret = read_direction_bus(active_if, opened_type, &active_bus);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (!bus_geometry_valid(&active_bus)) {
+        ESP_LOGE(TAG, "Invalid active bus geometry after first open");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    ret = read_direction_bus(peer_if, peer_type, &peer_bus);
+    if (ret == ESP_CODEC_DEV_WRONG_STATE) {
+        return expect_peer_bus ? ret : ESP_CODEC_DEV_OK;
+    }
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (opened_type == ESP_CODEC_DEV_TYPE_OUT) {
+        return check_shared_clocks(&active_bus, &peer_bus);
+    }
+    return check_shared_clocks(&peer_bus, &active_bus);
+}
+
+static bool bus_info_equal(const esp_codec_dev_bus_info_t *lhs, const esp_codec_dev_bus_info_t *rhs)
+{
+    return lhs != NULL && rhs != NULL &&
+           lhs->mode == rhs->mode &&
+           lhs->sample_rate == rhs->sample_rate &&
+           lhs->mclk_multiple == rhs->mclk_multiple &&
+           lhs->total_slot == rhs->total_slot &&
+           lhs->slot_bit == rhs->slot_bit &&
+           lhs->data_bit == rhs->data_bit &&
+           lhs->slot_mask == rhs->slot_mask &&
+           lhs->total_frame_bits == rhs->total_frame_bits;
+}
+
+static int reapply_same_fmt(const audio_codec_data_if_t *data_if, esp_codec_dev_type_t dev_type,
+                            const esp_codec_dev_sample_info_t *fs)
+{
+    esp_codec_dev_bus_info_t before = {0};
+    esp_codec_dev_bus_info_t after = {0};
+    if (data_if == NULL || data_if->set_fmt == NULL || data_if->get_bus_info == NULL || fs == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    int ret = data_if->get_bus_info(data_if, dev_type, &before);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    esp_codec_dev_sample_info_t same_fs = *fs;
+    ret = data_if->set_fmt(data_if, dev_type, &same_fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    ret = data_if->get_bus_info(data_if, dev_type, &after);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (!bus_info_equal(&before, &after)) {
+        ESP_LOGE(TAG, "Repeated set_fmt changed bus geometry");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    return ESP_CODEC_DEV_OK;
+}
+
 static int _get_bytes_per_second(const esp_codec_dev_sample_info_t *fs)
 {
     int channel_mask = fs->channel_mask;
@@ -409,8 +561,13 @@ static void mirror_task(void *arg)
             if (max_sample > min_sample) {
                 ctx->saw_active_data = true;
             }
+            // A Unity assertion here would longjmp out of this task, leaking mirror_buf and leaving the
+            // main task waiting on ctx->done. Report through ctx and let the caller assert.
             ret = esp_codec_dev_write(ctx->play_dev, mirror_buf, bytes_read);
-            TEST_ESP_OK(ret);
+            if (ret != ESP_CODEC_DEV_OK) {
+                ctx->ret = ret;
+                break;
+            }
         } else if (ret == ESP_CODEC_DEV_TIMEOUT) {
             continue;
         } else if (ret == ESP_CODEC_DEV_WRONG_STATE && ctx->stop) {
@@ -472,14 +629,17 @@ static int verify_basic_io(codec_case_ctx_t *ctx,
         ret_code = test_analyze_recorded_pcm_s16(recorded_all, total_play_bytes, record_bytes);
     }
     mirror_ctx.stop = true;
-    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(mirror_ctx.done, pdMS_TO_TICKS(5000)));
+    BaseType_t join_ret = xSemaphoreTake(mirror_ctx.done, pdMS_TO_TICKS(5000));
     vSemaphoreDelete(mirror_ctx.done);
+
+    // Release the buffers before asserting so a mirror failure does not also report a leak.
+    free(recorded_all);
+    free(record_buf);
+
+    TEST_ASSERT_EQUAL(pdTRUE, join_ret);
     TEST_ESP_OK(mirror_ctx.ret);
     TEST_ASSERT_GREATER_THAN(0, mirror_ctx.total_read);
     TEST_ASSERT_TRUE(mirror_ctx.saw_active_data);
-
-    free(recorded_all);
-    free(record_buf);
     return ret_code;
 }
 
@@ -542,7 +702,7 @@ static void verify_record_label_layout(codec_case_ctx_t *ctx)
     esp_codec_dev_channel_map_t order = {0};
     ret = esp_codec_dev_get_data_layout(ctx->record_inst.codec_dev, &order);
     TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
-    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP(2, 1, 0, 0, 0, 0, 0, 0), order.value);
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), order.value);
 }
 
 static int verify_basic_io_with_32bit_capture_check(codec_case_ctx_t *ctx,
@@ -628,15 +788,31 @@ static void run_es8311_es7210_open_order_case(case_init_order_t init_order,
     if (open_order == CASE_OPEN_PLAY_FIRST) {
         ret = open_play(&ctx, &play_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_play_only(&ctx, &play_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = check_buses_after_first_open(&ctx, ESP_CODEC_DEV_TYPE_OUT,
+                                           init_order == CASE_INIT_RX_FIRST);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = open_record(&ctx, &record_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
     } else {
         ret = open_record(&ctx, &record_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_record_only(&ctx, &record_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = check_buses_after_first_open(&ctx, ESP_CODEC_DEV_TYPE_IN,
+                                           init_order == CASE_INIT_TX_FIRST);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = open_play(&ctx, &play_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
     }
 
+    ret = check_duplex_buses(&ctx);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
+    ret = reapply_same_fmt(ctx.play_inst.data_if, ESP_CODEC_DEV_TYPE_OUT, &play_fs);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
+    ret = reapply_same_fmt(ctx.record_inst.data_if, ESP_CODEC_DEV_TYPE_IN, &record_fs);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
     ret = verify_basic_io(&ctx, &play_fs, &record_fs);
     CHECK_CODEC_DEV_GOTO_OK(ret);
     verify_record_label_layout(&ctx);
@@ -679,15 +855,31 @@ static void run_es8311_es7210_shared_data_if_case(case_init_order_t init_order,
     if (open_order == CASE_OPEN_PLAY_FIRST) {
         ret = open_play(&ctx, &play_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_play_only(&ctx, &play_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = check_buses_after_first_open(&ctx, ESP_CODEC_DEV_TYPE_OUT,
+                                           init_order == CASE_INIT_RX_FIRST);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = open_record(&ctx, &record_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
     } else {
         ret = open_record(&ctx, &record_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_record_only(&ctx, &record_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = check_buses_after_first_open(&ctx, ESP_CODEC_DEV_TYPE_IN,
+                                           init_order == CASE_INIT_TX_FIRST);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = open_play(&ctx, &play_fs);
         CHECK_CODEC_DEV_GOTO_OK(ret);
     }
 
+    ret = check_duplex_buses(&ctx);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
+    ret = reapply_same_fmt(shared_data_if, ESP_CODEC_DEV_TYPE_OUT, &play_fs);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
+    ret = reapply_same_fmt(shared_data_if, ESP_CODEC_DEV_TYPE_IN, &record_fs);
+    CHECK_CODEC_DEV_GOTO_OK(ret);
     ret = verify_basic_io(&ctx, &play_fs, &record_fs);
 cleanup:
     case_teardown(&ctx);
@@ -740,13 +932,15 @@ static void run_es8311_es7210_close_order_case(bool shared_data_if,
     CHECK_CODEC_DEV_GOTO_OK(ret);
     if (close_order == CASE_CLOSE_PLAY_FIRST) {
         ret = close_play(&ctx);
-    } else {
-        ret = close_record(&ctx);
-    }
-    CHECK_CODEC_DEV_GOTO_OK(ret);
-    if (close_order == CASE_CLOSE_PLAY_FIRST) {
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_record_only(&ctx, &record_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = close_record(&ctx);
     } else {
+        ret = close_record(&ctx);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
+        ret = verify_play_only(&ctx, &play_fs);
+        CHECK_CODEC_DEV_GOTO_OK(ret);
         ret = close_play(&ctx);
     }
 
@@ -931,6 +1125,55 @@ static void run_es8311_es7210_equal_total_bits_case(case_init_order_t init_order
     TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
 }
 
+static void run_std_tx_rejects_96bit_tdm_rx_without_disturbing_playback(void)
+{
+    codec_case_ctx_t ctx = {0};
+    int ret = case_setup_i2s(CASE_INIT_TX_FIRST);
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
+    ret = init_play_inst(&ctx.play_inst);
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
+    ret = init_record_inst(&ctx.record_inst);
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
+
+    esp_codec_dev_sample_info_t play_fs = make_play_fs_2ch_16bit(CASE_INIT_TX_FIRST);
+    ret = open_play(&ctx, &play_fs);
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
+
+    esp_codec_dev_bus_info_t before = {0};
+    esp_codec_dev_bus_info_t after = {0};
+    TEST_ASSERT_NOT_NULL(ctx.play_inst.data_if->get_bus_info);
+    TEST_ESP_OK(ctx.play_inst.data_if->get_bus_info(ctx.play_inst.data_if, ESP_CODEC_DEV_TYPE_OUT, &before));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, before.mode);
+    TEST_ASSERT_EQUAL_UINT8(2, before.total_slot);
+    TEST_ASSERT_EQUAL_UINT8(16, before.slot_bit);
+    TEST_ASSERT_EQUAL_UINT16(32, before.total_frame_bits);
+
+    /* Slots 0 and 1 of a 6-slot frame carry ES7210 CH1 and CH3, so the request is one the codec can
+       serve and the rejection has to come from the 96-bit frame not fitting beside the STD TX. */
+    esp_codec_dev_sample_info_t record_fs = {
+        .sample_rate = 16000,
+        .channel = 6,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+        .channel_mask = BIT(0) | BIT(1),
+    };
+    ret = open_record(&ctx, &record_fs);
+    TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_NOT_SUPPORT, ret);
+
+    TEST_ESP_OK(ctx.play_inst.data_if->get_bus_info(ctx.play_inst.data_if, ESP_CODEC_DEV_TYPE_OUT, &after));
+    TEST_ASSERT_EQUAL(before.mode, after.mode);
+    TEST_ASSERT_EQUAL_UINT32(before.sample_rate, after.sample_rate);
+    TEST_ASSERT_EQUAL(before.mclk_multiple, after.mclk_multiple);
+    TEST_ASSERT_EQUAL_UINT8(before.total_slot, after.total_slot);
+    TEST_ASSERT_EQUAL_UINT8(before.slot_bit, after.slot_bit);
+    TEST_ASSERT_EQUAL_UINT8(before.data_bit, after.data_bit);
+    TEST_ASSERT_EQUAL_UINT16(before.slot_mask, after.slot_mask);
+    TEST_ASSERT_EQUAL_UINT16(before.total_frame_bits, after.total_frame_bits);
+    TEST_ESP_OK(verify_play_only(&ctx, &play_fs));
+
+    case_teardown(&ctx);
+}
+
 #define DEFINE_ORDER_CASE(_name, _init_order, _new_order, _open_order)            \
     TEST_CASE(_name, "[korvo2_v3][i2s_order]")                                    \
     {                                                                             \
@@ -1052,4 +1295,10 @@ DEFINE_EQUAL_TOTAL_BITS_CASE("es8311+es7210 isolated data_if equal-total-bits in
                              CASE_INIT_RX_FIRST, CASE_OPEN_PLAY_FIRST)
 DEFINE_EQUAL_TOTAL_BITS_CASE("es8311+es7210 isolated data_if equal-total-bits init-rx-first open-record-first",
                              CASE_INIT_RX_FIRST, CASE_OPEN_RECORD_FIRST)
+
+TEST_CASE("STD playback remains valid when 96-bit TDM record is rejected",
+          "[korvo2_v3][duplex][total_slot][negative]")
+{
+    run_std_tx_rejects_96bit_tdm_rx_without_disturbing_playback();
+}
 #endif  /* CONFIG_IDF_TARGET_ESP32S3 && defined(CONFIG_CODEC_ES7210_SUPPORT) && defined(CONFIG_CODEC_ES8311_SUPPORT) */

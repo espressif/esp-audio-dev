@@ -30,6 +30,16 @@ static const char *TAG = "CODEC_DEV_P4_EV_BOARD";
 /* External MCLK pin for multi-codec tests (same GPIO as LP_I2S MCK on P4 EV board). */
 #define TEST_BOARD_LP_I2S_MCK_PIN  (13)
 
+#define TEST_ES8311_REOPEN_ROUNDS          (5)
+#define TEST_ES8311_REOPEN_SECONDS         (5)
+#define TEST_ES8311_REOPEN_SAMPLE_RATE     (8000)
+#define TEST_ES8311_REOPEN_CHANNEL         (1)
+#define TEST_ES8311_REOPEN_BITS            (16)
+#define TEST_ES8311_REOPEN_CHUNK_BYTES     (512)
+#define TEST_ES8311_REOPEN_ADC_SETTLE_US   (200 * 1000)
+/* Capture starts with a decaying power-up transient; analyze the steady-state tail only. */
+#define TEST_ES8311_REOPEN_WARMUP_SECONDS  (2)
+
 typedef struct {
     const audio_codec_data_if_t *data_if;
     const audio_codec_ctrl_if_t *ctrl_if;
@@ -222,7 +232,7 @@ static void verify_record_label_layout(esp_codec_dev_handle_t record_dev)
     esp_codec_dev_channel_map_t order = {0};
     ret = esp_codec_dev_get_data_layout(record_dev, &order);
     TEST_ASSERT_EQUAL_INT(ESP_CODEC_DEV_OK, ret);
-    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP(2, 1, 0, 0, 0, 0, 0, 0), order.value);
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), order.value);
 }
 
 static void fill_dacr_loopback_tone(int16_t *data, int frame_count, int scale)
@@ -612,6 +622,80 @@ static void multiple_es8311_run(bool reuse_data_if, bool separate_channels, i2s_
     }
 }
 
+static void multiple_es8311_reopen_record_play_run(void)
+{
+    int ret = multiple_es8311_init_i2s(false, I2S_ROLE_MASTER, I2S_ROLE_MASTER, false);
+    TEST_ESP_OK(ret);
+
+    codec_es8311_inst_t play_inst = {};
+    ret = init_es8311_inst(&play_inst, true, NULL, false, true);
+    TEST_ESP_OK(ret);
+    codec_es8311_inst_t record_inst = {};
+    ret = init_es8311_inst(&record_inst, false, NULL, false, true);
+    TEST_ESP_OK(ret);
+
+    ret = esp_codec_dev_set_out_vol(play_inst.codec_dev, TEST_CODEC_BOARD_OUT_VOL);
+    TEST_ESP_OK(ret);
+    ret = esp_codec_dev_set_in_gain(record_inst.codec_dev, TEST_CODEC_BOARD_IN_GAIN);
+    TEST_ESP_OK(ret);
+
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = TEST_ES8311_REOPEN_SAMPLE_RATE,
+        .channel = TEST_ES8311_REOPEN_CHANNEL,
+        .bits_per_sample = TEST_ES8311_REOPEN_BITS,
+        .channel_mask = 0x01,
+        .mclk_multiple = 256,
+    };
+    const int bytes_per_second = fs.sample_rate * fs.channel * (fs.bits_per_sample >> 3);
+    const int limit_size = TEST_ES8311_REOPEN_SECONDS * bytes_per_second;
+    const int warmup_size = TEST_ES8311_REOPEN_WARMUP_SECONDS * bytes_per_second;
+    TEST_ASSERT_GREATER_THAN(warmup_size, limit_size);
+    uint8_t *data = (uint8_t *)malloc(limit_size);
+    TEST_ASSERT_NOT_NULL(data);
+
+    for (int round = 0; round < TEST_ES8311_REOPEN_ROUNDS; round++) {
+        ESP_LOGI(TAG, "Reopen record-play round %d/%d: %dHz %dch %dbit %ds",
+                 round + 1, TEST_ES8311_REOPEN_ROUNDS, fs.sample_rate, fs.channel,
+                 fs.bits_per_sample, TEST_ES8311_REOPEN_SECONDS);
+        ret = esp_codec_dev_open(record_inst.codec_dev, &fs);
+        TEST_ESP_OK(ret);
+        esp_rom_delay_us(TEST_ES8311_REOPEN_ADC_SETTLE_US);
+        ret = esp_codec_dev_open(play_inst.codec_dev, &fs);
+        TEST_ESP_OK(ret);
+        /* Data will not be stable if ADC power down and power up immediately */
+        esp_rom_delay_us(TEST_ES8311_REOPEN_ADC_SETTLE_US);
+
+        int read_size = 0;
+        while (read_size < limit_size) {
+            int once = limit_size - read_size;
+            if (once > TEST_ES8311_REOPEN_CHUNK_BYTES) {
+                once = TEST_ES8311_REOPEN_CHUNK_BYTES;
+            }
+            ret = esp_codec_dev_read(record_inst.codec_dev, data + read_size, once);
+            TEST_ESP_OK(ret);
+            ret = esp_codec_dev_write(play_inst.codec_dev, data + read_size, once);
+            TEST_ESP_OK(ret);
+            test_print_pcm_s16_head(data + read_size, 4);
+            read_size += once;
+        }
+        TEST_ESP_OK(test_analyze_recorded_pcm_s16(data + warmup_size, limit_size - warmup_size,
+                                                  TEST_ES8311_REOPEN_CHUNK_BYTES));
+
+        ret = esp_codec_dev_close(record_inst.codec_dev);
+        TEST_ESP_OK(ret);
+        esp_rom_delay_us(TEST_ES8311_REOPEN_ADC_SETTLE_US);
+        ret = esp_codec_dev_close(play_inst.codec_dev);
+        TEST_ESP_OK(ret);
+        esp_rom_delay_us(TEST_ES8311_REOPEN_ADC_SETTLE_US);
+    }
+
+    free(data);
+    deinit_es8311_inst(&play_inst);
+    deinit_es8311_inst(&record_inst);
+    ut_i2c_deinit(0);
+    ut_i2s_deinit(0);
+}
+
 // TEST_CASE("Multiple es8311 codec with separate TX/RX slave and codec master with external MCLK test use P4_EV_BOARD 16000Hz", "[p4_ev][multi_codec]")
 // {
 //     // Drive external MCLK with LEDC, let codec output BCLK/WS, and keep TX/RX channels in slave mode.
@@ -637,6 +721,11 @@ TEST_CASE("Multiple es8311 codec reuse data_if test use P4_EV_BOARD 8000Hz", "[p
     // This test code only test multiple codec only share data_if
     // Actually can use share data_if, codec_if, gpio_if to save memory
     multiple_es8311_run(true, false, I2S_ROLE_MASTER, I2S_ROLE_MASTER, 8000, false, false);
+}
+
+TEST_CASE("ES8311 reopen ADC/DAC record-play use P4_EV_BOARD 8000Hz 1ch", "[p4_ev][duplex]")
+{
+    multiple_es8311_reopen_record_play_run();
 }
 
 TEST_CASE("Multiple es8311 codec reuse data_if test use P4_EV_BOARD 16000Hz", "[p4_ev][multi_codec]")

@@ -357,7 +357,7 @@ static void test_case_es8389_separate_play_record_play_with_isolated_interfaces(
     TEST_ESP_OK(ret);
     ret = esp_codec_dev_open(record_inst.codec_dev, &fs);
     TEST_ESP_OK(ret);
-    esp_codec_dev_sleep(100);
+    esp_codec_dev_sleep(150);
     int recorded = 0;
     while (recorded < total_bytes) {
         int once = (total_bytes - recorded > chunk_bytes) ? chunk_bytes : (total_bytes - recorded);
@@ -580,7 +580,14 @@ static void test_case_es8389_record_while_playing_full_duplex_custom_pins(void)
     fs.channel_mask = 0x0F;
     ret = esp_codec_dev_open(record_dev, &fs);
     TEST_ESP_OK(ret);
-    /*
+    esp_codec_dev_bus_info_t rx_bus = {0};
+    TEST_ASSERT_NOT_NULL(data_if->get_bus_info);
+    TEST_ESP_OK(data_if->get_bus_info(data_if, ESP_CODEC_DEV_TYPE_IN, &rx_bus));
+    TEST_ASSERT_EQUAL_UINT32(48000, rx_bus.sample_rate);
+    TEST_ASSERT_EQUAL_UINT8(4, rx_bus.total_slot);
+    TEST_ASSERT_EQUAL_UINT16(64, rx_bus.total_frame_bits);
+    TEST_ASSERT_EQUAL_UINT16(0x0F, rx_bus.slot_mask);
+    /**
      * Regression: open record first, wait, then open play on a shared codec_if.
      * Opening play reconfigs I2S and briefly stops the clock; after the gap the
      * chip may enter analog standby. Without bias restore in set_fs, duplex
@@ -594,9 +601,23 @@ static void test_case_es8389_record_while_playing_full_duplex_custom_pins(void)
     fs.channel_mask = 0x03;
     ret = esp_codec_dev_open(play_dev, &fs);
     TEST_ESP_OK(ret);
+    esp_codec_dev_bus_info_t tx_bus = {0};
+    TEST_ESP_OK(data_if->get_bus_info(data_if, ESP_CODEC_DEV_TYPE_OUT, &tx_bus));
+    TEST_ESP_OK(data_if->get_bus_info(data_if, ESP_CODEC_DEV_TYPE_IN, &rx_bus));
+    TEST_ASSERT_EQUAL_UINT8(4, tx_bus.total_slot);
+    TEST_ASSERT_EQUAL_UINT16(64, tx_bus.total_frame_bits);
+    TEST_ASSERT_EQUAL_UINT16(0x05, tx_bus.slot_mask);
+    TEST_ASSERT_EQUAL_UINT8(4, rx_bus.total_slot);
+    TEST_ASSERT_EQUAL_UINT16(0x0F, rx_bus.slot_mask);
+
+    esp_codec_dev_channel_map_t live_layout = {0};
+    TEST_ESP_OK(esp_codec_dev_get_data_layout(play_dev, &live_layout));
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2), live_layout.value);
+    TEST_ESP_OK(esp_codec_dev_get_data_layout(record_dev, &live_layout));
+    TEST_ASSERT_EQUAL_HEX32(ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4), live_layout.value);
 
     esp_codec_dev_channel_map_t order = {
-        .value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 2, 4, 0, 0, 0, 0),
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4),
     };
     ret = esp_codec_dev_set_data_layout(play_dev, &order);
     TEST_ESP_OK(ret);
@@ -672,21 +693,18 @@ static void test_case_es8389_dac_ref_loopback_custom_pins(void)
         },
         .adc_cfg = {
             .digital_mic = false,
-            .label = "FL,FR,RE,NA",
+            .label = "FL,FR,NA,RE",
         },
         .dac_cfg = {
             .ref_enable = true,
         },
-        .pa_cfg = {
-            .pa_pin = ES8389_TEST_BOARD_PA,
-            .pa_active_low = false,
-            .hw_gain = {
-                .pa_voltage = 5.0f,
-                .codec_dac_voltage = 3.3f,
-                .pa_gain = 0.0f,
-            },
-        },
     };
+    es8389_cfg.pa_cfg.pa_pin = ES8389_TEST_BOARD_PA;
+    es8389_cfg.pa_cfg.pa_active_low = false;
+    es8389_cfg.pa_cfg.hw_gain.pa_voltage = 5.0f;
+    es8389_cfg.pa_cfg.hw_gain.codec_dac_voltage = 3.3f;
+    es8389_cfg.pa_cfg.hw_gain.pa_gain = 0.0f;
+
     const audio_codec_if_t *codec_if = es8389_codec_new(&es8389_cfg);
     TEST_ASSERT_NOT_NULL(codec_if);
 
@@ -709,20 +727,20 @@ static void test_case_es8389_dac_ref_loopback_custom_pins(void)
     char label[16] = {0};
     ret = esp_codec_dev_get_data_layout_label(record_dev, label, sizeof(label));
     TEST_ESP_OK(ret);
-    TEST_ASSERT_EQUAL_STRING("FL,RE,FR,NA", label);
+    TEST_ASSERT_EQUAL_STRING("FL,NA,FR,RE", label);
 
     esp_codec_dev_sample_info_t play_fs = {
         .sample_rate = 16000,
         .channel = 2,
         .bits_per_sample = 16,
-        .channel_mask = BIT(0),
+        .channel_mask = BIT(1),
         .mclk_multiple = 256,
     };
     esp_codec_dev_sample_info_t record_fs = {
         .sample_rate = 16000,
         .channel = 4,
         .bits_per_sample = 16,
-        .channel_mask = BIT(0) | BIT(1) | BIT(2),
+        .channel_mask = BIT(0) | BIT(1) | BIT(3),
         .mclk_multiple = 256,
     };
     ret = esp_codec_dev_open(record_dev, &record_fs);
