@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0-beta5
+
+### Bug Fixed
+
+- Fixed ADC data interface compile on IDF 6.2 after `SOC_ADC_CHANNEL_NUM` was removed from SoC caps.
+
 ## v2.0.0-beta4
 
 ### Breaking Change

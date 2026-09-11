@@ -19,7 +19,12 @@ variables:
         TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
         AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.1:1"
         AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
-    # master omitted: esp-env-master:1 is not published on ciregistry yet
+    # No esp-env-master image yet: reuse v6.1 images and check out IDF master in the job
+    - master:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
+        AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.1:1"
+        AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
 
   # Latest stable version (required): ``${LATEST_IDF_VERSION}``
   # Scanners and generated_triggers in tools/ci/apps.yaml all depend on this field

@@ -151,6 +151,23 @@ function _utils_idf_numeric_version() {
   fi
 }
 
+# Echo the IDF version used for apps.yaml range checks and .build_test_rules.yml expressions.
+# ${IDF_VERSION_TAG} may be a plain branch name (e.g. master) that carries no version number; the
+# ci-tools scanner would then read it as 0.0.0 and drop every app. Fall back to version.cmake.
+function _ci_apps_idf_version() {
+  local tag="${IDF_VERSION_TAG:-}"
+  if [[ "${tag}" =~ ^(release/)?v?[0-9]+\.[0-9]+ ]]; then
+    printf '%s\n' "${tag}"
+    return
+  fi
+  local numeric="${CI_TESTING_IDF_VERSION:-$(_utils_idf_numeric_version)}"
+  if [[ -n "${numeric}" ]]; then
+    printf 'v%s\n' "${numeric}"
+  else
+    printf '%s\n' "${tag}"
+  fi
+}
+
 # idf_component_manager reads IDF_VERSION and requires a pure semver (e.g. 6.1.0).
 # CI also uses IDF_VERSION as the git ref (release/v6.1, v6.1-dev, v6.0.1). After IDF is
 # checked out, clear non-numeric IDF_VERSION and expose CI_TESTING_IDF_VERSION instead.
@@ -233,6 +250,9 @@ function check_idf_version() {
   elif [[ "$idf_ver_tag" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
     export IDF_VERSION="${idf_ver_tag}"
     echo "Detected tag: ${IDF_VERSION}"
+  elif [[ "$idf_ver_tag" == "master" ]]; then
+    export IDF_VERSION="master"
+    echo "Detected branch: ${IDF_VERSION}"
   elif [[ "$idf_ver_tag" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
     export IDF_VERSION="${idf_ver_tag}"
     echo "Detected commit id: ${IDF_VERSION}"
@@ -453,7 +473,7 @@ function check_sdkconfig() {
     # Run scanner first to produce apps.txt
     run_cmd python ${CI_TOOLS_PATH}/ci/app_service/apps_service.py scanner --target ${IDF_TARGET} \
               --board ${BOARD} \
-              --idf_ver ${IDF_VERSION_TAG} \
+              --idf_ver "$(_ci_apps_idf_version)" \
               --apps-yaml ${PROJECT_ROOT}/tools/ci/apps.yaml \
               --ci-config-file "${PROJECT_ROOT}/.gitlab/ci/ci-config.yml" \
               --project-path "${PROJECT_ROOT}" \
@@ -558,7 +578,7 @@ function _read_apps_path_json_paths() {
       --rules-file "${rules_file}" \
       --project-root "${project_root}" \
       --target "${target_filter:-${IDF_TARGET:-}}" \
-      --idf-version "${IDF_VERSION_TAG:-}" \
+      --idf-version "$(_ci_apps_idf_version)" \
       --config-name "${CONFIG_NAME:-default}" \
       --include-default "${INCLUDE_DEFAULT:-1}" \
       --job "${job_filter}" < "${paths_file}"
@@ -730,7 +750,7 @@ function build_test_apps() {
     python "${CI_TOOLS_PATH}/ci/app_service/apps_service.py"
     --target "${IDF_TARGET}"
     --board "${BOARD}"
-    --idf_ver "${IDF_VERSION_TAG}"
+    --idf_ver "$(_ci_apps_idf_version)"
     --app-type "${app_type}"
     --apps-yaml "${PROJECT_ROOT}/tools/ci/apps.yaml"
     --ci-config-file "${PROJECT_ROOT}/.gitlab/ci/ci-config.yml"

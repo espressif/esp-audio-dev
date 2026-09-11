@@ -23,3 +23,6 @@
 .if_idf_v5_5: &if_idf_v5_5 {if: 'IDF_VERSION_MAJOR == 5 and IDF_VERSION_MINOR == 5'}
 .if_idf_v6_0: &if_idf_v6_0 {if: 'IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR == 0'}
 .if_idf_v6_1: &if_idf_v6_1 {if: 'IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR == 1'}
+# Branch refs such as master carry no tag version; CI passes the version.cmake version instead
+# (see _ci_apps_idf_version in tools/ci/utils.sh), so match them by their numeric version.
+.if_idf_v6_2: &if_idf_v6_2 {if: 'IDF_VERSION_MAJOR == 6 and IDF_VERSION_MINOR == 2'}
