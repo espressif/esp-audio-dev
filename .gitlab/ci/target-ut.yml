@@ -73,7 +73,7 @@ pytest_components_esp32s3:
   extends:
     - .rules:build:enable-unit-test-static
     - .pytest_components_template
-    - .matrix_template
+    - .matrix_template_with_master
   needs:
     - 'component_test_esp32s3'
   tags: [ esp32s3, ESP_GMF_COMPONENT ]
@@ -97,8 +97,8 @@ pytest_components_esp32p4:
   extends:
     - .rules:build:enable-unit-test-static
     - .pytest_components_template
-  # Build still uses .matrix_template_v5_5 (v5.5.3 / v6.0.1 / release/v6.1).
-  # Board test is v6.0.1 only: release/v6.1 flash on current P4 USB-JTAG runners is unstable.
+  # Build uses .matrix_template_v5_5_with_master.
+  # Board test is v6.0.1 only: release/v6.1 and master flash on current P4 USB-JTAG runners is unstable.
   parallel:
     matrix:
       - IDF_VERSION_TAG: ['v6.0.1']

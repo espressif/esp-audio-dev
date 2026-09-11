@@ -36,7 +36,8 @@ static const char *TAG = "CODEC_ADC_IF";
 #define CODEC_ADC_UNIT2_CHANNEL_SUBSTRATION  (0)
 #endif  /* ADC_LL_UNIT2_CHANNEL_SUBSTRATION */
 
-#elif !defined(SOC_ADC_SAMPLE_FREQ_THRES_LOW) || !defined(SOC_ADC_SAMPLE_FREQ_THRES_HIGH)
+#elif !defined(SOC_ADC_SAMPLE_FREQ_THRES_LOW) || !defined(SOC_ADC_SAMPLE_FREQ_THRES_HIGH) \
+      || !defined(SOC_ADC_CHANNEL_NUM)
 #include "hal/adc_ll.h"
 #endif  /* ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 2) */
 
@@ -49,13 +50,21 @@ static const char *TAG = "CODEC_ADC_IF";
 #define ADC_DATA_READ_FILTER_ENABLE  0
 #endif  /* ADC_DATA_READ_FILTER_ENABLE */
 
-#ifdef SOC_ADC_MAX_CHANNEL_NUM
-#define CODEC_ADC_MAX_CHANNEL_NUM  SOC_ADC_MAX_CHANNEL_NUM
-#elif SOC_ADC_PERIPH_NUM > 1
-#define CODEC_ADC_MAX_CHANNEL_NUM  ((SOC_ADC_CHANNEL_NUM(0) > SOC_ADC_CHANNEL_NUM(1)) ? SOC_ADC_CHANNEL_NUM(0) : SOC_ADC_CHANNEL_NUM(1))
+#define CODEC_ADC_PERIPH_NUM  SOC_ADC_PERIPH_NUM
+
+#ifdef SOC_ADC_CHANNEL_NUM
+#define CODEC_ADC_CHANNEL_NUM(unit)  SOC_ADC_CHANNEL_NUM(unit)
 #else
-#define CODEC_ADC_MAX_CHANNEL_NUM  SOC_ADC_CHANNEL_NUM(0)
-#endif  /* SOC_ADC_MAX_CHANNEL_NUM */
+#define CODEC_ADC_CHANNEL_NUM(unit)  ADC_LL_CHANNEL_NUM(unit)
+#endif  /* SOC_ADC_CHANNEL_NUM */
+
+#if CODEC_ADC_PERIPH_NUM > 1
+#define CODEC_ADC_MAX_CHANNEL_NUM  \
+    ((CODEC_ADC_CHANNEL_NUM(0) > CODEC_ADC_CHANNEL_NUM(1)) ? \
+     CODEC_ADC_CHANNEL_NUM(0) : CODEC_ADC_CHANNEL_NUM(1))
+#else
+#define CODEC_ADC_MAX_CHANNEL_NUM  CODEC_ADC_CHANNEL_NUM(0)
+#endif  /* CODEC_ADC_PERIPH_NUM > 1 */
 
 #ifdef SOC_ADC_SAMPLE_FREQ_THRES_LOW
 #define CODEC_ADC_SAMPLE_FREQ_THRES_LOW  SOC_ADC_SAMPLE_FREQ_THRES_LOW
@@ -99,8 +108,8 @@ typedef struct {
 #endif  /* ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 2) */
     uint32_t                          parsed_buf_count;
     uint32_t                          current_sample_rate_hz;
-    uint8_t                           base_pattern_bits[SOC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM];
-    uint8_t                           active_pattern_bits[SOC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM];
+    uint8_t                           base_pattern_bits[CODEC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM];
+    uint8_t                           active_pattern_bits[CODEC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM];
 } adc_data_t;
 
 static inline bool adc_data_bit_width_valid(uint8_t bit_width)
@@ -130,10 +139,10 @@ static inline int32_t adc_centered_to_pcm(int32_t centered, uint8_t out_bits, ui
 
 static inline bool adc_unit_channel_in_range(adc_unit_t unit, adc_channel_t channel)
 {
-    return unit < SOC_ADC_PERIPH_NUM && channel < CODEC_ADC_MAX_CHANNEL_NUM;
+    return unit < CODEC_ADC_PERIPH_NUM && channel < CODEC_ADC_CHANNEL_NUM(unit);
 }
 
-static inline void adc_store_pattern_bits(uint8_t pattern_bits[SOC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM],
+static inline void adc_store_pattern_bits(uint8_t pattern_bits[CODEC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM],
                                           adc_unit_t unit, adc_channel_t channel, uint8_t sample_bits)
 {
     if (adc_unit_channel_in_range(unit, channel) && pattern_bits[unit][channel] == 0) {
@@ -228,16 +237,16 @@ static esp_err_t adc_parse_raw_data(adc_data_t *adc_data,
             parsed_data[i].raw_data = p->type1.data;
         }
 #else
-#if SOC_ADC_PERIPH_NUM == 1
+#if CODEC_ADC_PERIPH_NUM == 1
         parsed_data[i].unit = ADC_UNIT_1;
 #else
         parsed_data[i].unit = p->type2.unit ? ADC_UNIT_2 : ADC_UNIT_1;
-#endif  /* SOC_ADC_PERIPH_NUM == 1 */
+#endif  /* CODEC_ADC_PERIPH_NUM == 1 */
         parsed_data[i].channel = (parsed_data[i].unit == ADC_UNIT_2) ?
                                      p->type2.channel - CODEC_ADC_UNIT2_CHANNEL_SUBSTRATION : p->type2.channel;
         parsed_data[i].raw_data = p->type2.data;
 #endif  /* CONFIG_IDF_TARGET_ESP32 */
-        parsed_data[i].valid = (parsed_data[i].channel < SOC_ADC_CHANNEL_NUM(parsed_data[i].unit));
+        parsed_data[i].valid = (parsed_data[i].channel < CODEC_ADC_CHANNEL_NUM(parsed_data[i].unit));
     }
     *num_parsed_samples = sample_count;
 #endif  /* ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 2) */
@@ -272,7 +281,7 @@ static esp_err_t adc_apply_patterns(adc_data_t *adc_data, const uint8_t *pattern
 
     /* Build a temporary hardware pattern list from selected base indices. */
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    uint8_t active_pattern_bits[SOC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM] = {0};
+    uint8_t active_pattern_bits[CODEC_ADC_PERIPH_NUM][CODEC_ADC_MAX_CHANNEL_NUM] = {0};
     for (int i = 0; i < pattern_num; i++) {
         adc_pattern[i] = adc_data->base_patterns[pattern_idx[i]];
         adc_store_pattern_bits(active_pattern_bits,
@@ -606,7 +615,7 @@ const audio_codec_data_if_t *audio_codec_new_adc_data(audio_codec_adc_cfg_t *adc
                 ESP_LOGE(TAG, "ADC unit %u not supported in continuous mode", adc_data->cfg.cfg.single_unit.unit_id);
                 goto new_err;
             }
-            if (adc_data->cfg.cfg.single_unit.channel_id[i] >= SOC_ADC_CHANNEL_NUM((adc_unit_t)adc_data->cfg.cfg.single_unit.unit_id)) {
+            if (adc_data->cfg.cfg.single_unit.channel_id[i] >= CODEC_ADC_CHANNEL_NUM((adc_unit_t)adc_data->cfg.cfg.single_unit.unit_id)) {
                 ESP_LOGE(TAG, "Invalid ADC channel %u for unit %u", adc_data->cfg.cfg.single_unit.channel_id[i],
                          adc_data->cfg.cfg.single_unit.unit_id);
                 goto new_err;
@@ -633,7 +642,7 @@ const audio_codec_data_if_t *audio_codec_new_adc_data(audio_codec_adc_cfg_t *adc
                 ESP_LOGE(TAG, "ADC unit %u not supported in continuous mode", adc_data->base_patterns[i].unit);
                 goto new_err;
             }
-            if (adc_data->base_patterns[i].channel >= SOC_ADC_CHANNEL_NUM((adc_unit_t)adc_data->base_patterns[i].unit)) {
+            if (adc_data->base_patterns[i].channel >= CODEC_ADC_CHANNEL_NUM((adc_unit_t)adc_data->base_patterns[i].unit)) {
                 ESP_LOGE(TAG, "Invalid ADC channel %u for unit %u", adc_data->base_patterns[i].channel,
                          adc_data->base_patterns[i].unit);
                 goto new_err;

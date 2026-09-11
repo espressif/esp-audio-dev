@@ -102,10 +102,14 @@
       variables:
         BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.0:3"
         TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.0:2"
-    - variables:
+    - if: '$IDF_VERSION_TAG == "release/v6.1" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+      variables:
         BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
         TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
-      if: '$IDF_VERSION_TAG == "release/v6.1" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+    - if: '$IDF_VERSION_TAG == "master" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "pipeline" || ($CI_PIPELINE_SOURCE == "merge_request_event" && ($BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i)) || $CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+      variables:
+        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
+        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
 
 .rules:build:enable-unit-test-esp32:
   rules:
@@ -195,14 +199,25 @@
     matrix:
       - IDF_VERSION_TAG: ['v5.4.4', 'v5.5.3', 'v6.0.1', 'release/v6.1']
 
+# Build matrix including IDF master (compile-only chips keep pytest on .matrix_template).
+.matrix_template_with_master:
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['v5.4.4', 'v5.5.3', 'v6.0.1', 'release/v6.1', 'master']
+
 # Targets only available on IDF v5.5.3+ (e.g. esp32p4).
 .matrix_template_v5_5:
   parallel:
     matrix:
       - IDF_VERSION_TAG: ['v5.5.3', 'v6.0.1', 'release/v6.1']
 
+.matrix_template_v5_5_with_master:
+  parallel:
+    matrix:
+      - IDF_VERSION_TAG: ['v5.5.3', 'v6.0.1', 'release/v6.1', 'master']
+
 # Targets only available on IDF v6.1+ (e.g. esp32s31).
 .matrix_template_v6_1:
   parallel:
     matrix:
-      - IDF_VERSION_TAG: ['release/v6.1']
+      - IDF_VERSION_TAG: ['release/v6.1', 'master']
