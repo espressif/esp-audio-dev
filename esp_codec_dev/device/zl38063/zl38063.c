@@ -302,6 +302,35 @@ static int zl38063_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t 
     return ESP_CODEC_DEV_OK;
 }
 
+static int zl38063_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                            esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE ||
+        (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) == 0) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (caps == NULL || *count == 0) {
+        *count = 1;
+        return ESP_CODEC_DEV_OK;
+    }
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FIXED,
+        .fixed = {
+            .channel = 2,
+            .bits_per_sample = 16,
+            .sample_rate = 48000,
+        },
+    };
+    caps[0] = dac_caps;
+    *count = 1;
+    return ESP_CODEC_DEV_OK;
+}
+
 const audio_codec_if_t *zl38063_codec_new(zl38063_codec_cfg_t *codec_cfg)
 {
     if (codec_cfg == NULL || codec_cfg->ctrl_if == NULL) {
@@ -328,6 +357,7 @@ const audio_codec_if_t *zl38063_codec_new(zl38063_codec_cfg_t *codec_cfg)
     codec->base.hw_base.set_fs = zl38063_set_fs;
     codec->base.hw_base.set_reg = zl38063_set_reg;
     codec->base.hw_base.get_reg = zl38063_get_reg;
+    codec->base.hw_base.get_caps = zl38063_get_caps;
     codec->base.hw_base.close = zl38063_close;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
 

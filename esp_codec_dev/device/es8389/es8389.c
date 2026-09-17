@@ -15,26 +15,30 @@
 
 #include "es8389_reg.h"
 #include "es8389_codec.h"
+#include "audio_codec_adc_label.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
 
 static const char *TAG = "ES8389";
 
+#define ES8389_NO_MCLK_LEGACY_FRAME_MUL  (4)
+
 /**
  * @brief  ES8389 codec driver instance
  */
 typedef struct {
-    audio_codec_if_t    base;                                   /*!< Codec interface vtable container */
-    audio_hw_adc_if_t   adc_ops;                                /*!< ADC operation callbacks */
-    audio_hw_dac_if_t   dac_ops;                                /*!< DAC operation callbacks */
-    es8389_codec_cfg_t  cfg;                                    /*!< Board configuration snapshot */
-    float               hw_gain;                                /*!< Cached hardware gain in dB */
-    bool                is_open;                                /*!< True after open completes */
-    bool                adc_enabled;                            /*!< True when ADC path is running */
-    bool                dac_enabled;                            /*!< True when DAC path is running */
-    bool                use_mclk;                               /*!< True when external MCLK is used */
-    bool                dac_ref_enabled;                        /*!< True when DAC reference is enabled */
-    char                adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
+    audio_codec_if_t              base;                                   /*!< Codec interface vtable container */
+    audio_hw_adc_if_t             adc_ops;                                /*!< ADC operation callbacks */
+    audio_hw_dac_if_t             dac_ops;                                /*!< DAC operation callbacks */
+    es8389_codec_cfg_t            cfg;                                    /*!< Board configuration snapshot */
+    float                         hw_gain;                                /*!< Cached hardware gain in dB */
+    bool                          is_open;                                /*!< True after open completes */
+    bool                          adc_enabled;                            /*!< True when ADC path is running */
+    bool                          dac_enabled;                            /*!< True when DAC path is running */
+    bool                          use_mclk;                               /*!< True when external MCLK is used */
+    bool                          dac_ref_enabled;                        /*!< True when DAC reference is enabled */
+    esp_codec_dev_sys_clk_info_t  clk_info;                               /*!< Cached bus clock; sample_rate 0 means empty */
+    char                          adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
 } audio_codec_es8389_t;
 
 /**
@@ -164,7 +168,7 @@ static const esp_codec_dev_device_map_info_t order_info[] = {
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP_8CH(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
 static const uint8_t es8389_cap_bits[] = {16, 24, 32};
@@ -644,19 +648,19 @@ static int es8389_dac_enable(const audio_codec_if_t *h, bool enable)
     return (ret == ESP_CODEC_DEV_OK) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
 }
 
-static int es8389_config_sample(audio_codec_es8389_t *codec, int sample_rate, int bits)
+static int es8389_config_sample(audio_codec_es8389_t *codec, int sample_rate, uint32_t sysclk_hz)
 {
     int ret = ESP_CODEC_DEV_OK;
 
-    int mclk_fre = sample_rate * bits * 4;
-    int rate = mclk_fre / sample_rate;
+    int ratio = (int)(sysclk_hz / (uint32_t)sample_rate);
+    int coeff = get_coeff(sysclk_hz, (uint32_t)ratio);
 
-    int coeff = get_coeff(mclk_fre, rate);
-
-    ESP_LOGD(TAG, "mclk_fre: %d, rate: %d, bits: %d, coeff: %d", mclk_fre, rate, bits, coeff);
+    ESP_LOGD(TAG, "sysclk_hz: %lu, ratio: %d, sample_rate: %d, coeff: %d",
+             (unsigned long)sysclk_hz, ratio, sample_rate, coeff);
 
     if (coeff < 0) {
-        ESP_LOGE(TAG, "Unable to configure sample rate %dHz with %dHz MCLK", sample_rate, mclk_fre);
+        ESP_LOGE(TAG, "Unable to configure sample rate %dHz with %luHz system clock",
+                 sample_rate, (unsigned long)sysclk_hz);
         return ESP_CODEC_DEV_NOT_SUPPORT;
     } else {
         ret |= es8389_write_reg(codec, ES8389_CLK_MANAGER_REG0x04, coeff_div[coeff].Reg0x04);
@@ -848,6 +852,7 @@ static int es8389_close(const audio_hw_base_t *h)
         }
         codec->adc_enabled = false;
         codec->dac_enabled = false;
+        memset(&codec->clk_info, 0, sizeof(codec->clk_info));
         codec->is_open = false;
     }
     return (ret == ESP_CODEC_DEV_OK) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
@@ -862,20 +867,60 @@ static bool es8389_is_open(const audio_hw_base_t *h)
     return codec->is_open;
 }
 
+static int es8389_set_sysclk(const audio_hw_base_t *h, const esp_codec_dev_sys_clk_info_t *clk_info)
+{
+    audio_codec_es8389_t *codec = (audio_codec_es8389_t *)h;
+    if (codec == NULL) {
+        ESP_LOGE(TAG, "Set codec clock failed: handle is NULL");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (clk_info == NULL) {
+        memset(&codec->clk_info, 0, sizeof(codec->clk_info));
+        return ESP_CODEC_DEV_OK;
+    }
+    if (codec->is_open == false) {
+        ESP_LOGE(TAG, "Set codec clock failed: codec is not open");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    if (clk_info->sample_rate == 0 || clk_info->total_slot == 0 || clk_info->bclk_hz == 0) {
+        ESP_LOGE(TAG, "Set codec clock failed: invalid clock geometry");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    codec->clk_info = *clk_info;
+    return ESP_CODEC_DEV_OK;
+}
+
 static int es8389_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t *fs, esp_codec_dev_type_t type)
 {
     (void)type;
     audio_codec_es8389_t *codec = (audio_codec_es8389_t *)h;
     int ret = ESP_CODEC_DEV_OK;
-    if (codec == NULL || fs == NULL) {
+    if (codec == NULL || fs == NULL || fs->sample_rate == 0) {
+        ESP_LOGE(TAG, "Set codec format failed: invalid argument");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     if (codec->is_open == false) {
+        ESP_LOGE(TAG, "Set codec format failed: codec is not open");
         return ESP_CODEC_DEV_WRONG_STATE;
     }
+    if (codec->clk_info.sample_rate != 0 && codec->clk_info.sample_rate != fs->sample_rate) {
+        ESP_LOGE(TAG, "Set codec clock failed: Bus sample rate %lu does not match requested rate %lu",
+                 (unsigned long)codec->clk_info.sample_rate, (unsigned long)fs->sample_rate);
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
 
-    if (!codec->use_mclk) {
-        ret |= es8389_config_sample(codec, fs->sample_rate, fs->bits_per_sample);
+    uint32_t sysclk_hz;
+    if (codec->use_mclk) {
+        uint16_t mclk_multiple = fs->mclk_multiple ? fs->mclk_multiple : MCLK_DEFAULT_DIV;
+        sysclk_hz = codec->clk_info.mclk_hz ? codec->clk_info.mclk_hz
+                                            : (uint32_t)fs->sample_rate * mclk_multiple;
+    } else {
+        uint32_t fallback_hz = (uint32_t)fs->sample_rate * fs->bits_per_sample * ES8389_NO_MCLK_LEGACY_FRAME_MUL;
+        sysclk_hz = codec->clk_info.sample_rate != 0 ? codec->clk_info.bclk_hz : fallback_hz;
+    }
+    ret = es8389_config_sample(codec, fs->sample_rate, sysclk_hz);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
     }
 
     ret |= es8389_set_bits_per_sample(codec, fs->bits_per_sample);
@@ -937,6 +982,40 @@ static int es8389_get_adc_label(const audio_hw_base_t *h, const char **label)
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     *label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es8389_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_es8389_t *codec = (audio_codec_es8389_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->adc_enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t active_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &active_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 4 || active_mask == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel configuration");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->cfg.adc_cfg.label = codec->adc_label;
     return ESP_CODEC_DEV_OK;
 }
 
@@ -1052,11 +1131,13 @@ const audio_codec_if_t *es8389_codec_new(es8389_codec_cfg_t *codec_cfg)
     codec->base.hw_base.open = es8389_open;
     codec->base.hw_base.is_open = es8389_is_open;
     codec->base.hw_base.set_fs = es8389_set_fs;
+    codec->base.hw_base.set_sysclk = es8389_set_sysclk;
     codec->base.hw_base.set_reg = es8389_set_reg;
     codec->base.hw_base.get_reg = es8389_get_reg;
     codec->base.hw_base.dump_reg = es8389_dump;
     codec->base.hw_base.get_order_list = es8389_get_order_list;
     codec->base.hw_base.get_adc_label = es8389_get_adc_label;
+    codec->base.hw_base.set_adc_label = es8389_set_adc_label;
     codec->base.hw_base.get_caps = es8389_get_caps;
     codec->base.hw_base.close = es8389_close;
     codec->base.ctrl_if = codec_cfg->ctrl_if;

@@ -85,6 +85,23 @@ static inline const char *codec_dev_i2s_mode_name(esp_codec_dev_i2s_mode_t mode)
 }
 
 /**
+ * @brief  Push committed I2S bus clock geometry into the codec
+ *
+ *         Clears any previous cache, then derives sample_rate, mclk_hz, bclk_hz, and
+ *         total_slot from get_bus_info() into set_sysclk when that callback exists.
+ *         mclk_hz is sample_rate * mclk_multiple; bclk_hz is sample_rate * total_frame_bits.
+ *
+ * @param[in]  dev  Codec device instance
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           Cached, skipped, or codec has no set_sysclk
+ *       - ESP_CODEC_DEV_INVALID_ARG  Clock callback rejected the converted bus
+ *       - ESP_CODEC_DEV_NOT_SUPPORT  Committed bus fields are invalid
+ *       - Other                      Propagated from get_bus_info or set_sysclk
+ */
+int codec_dev_apply_sysclk(codec_dev_t *dev);
+
+/**
  * @brief  Re-apply cached volume, gain, and mute after a format change
  *
  * @param[in]  dev  Codec device instance

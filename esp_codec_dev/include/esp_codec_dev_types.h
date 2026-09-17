@@ -174,6 +174,22 @@ typedef struct {
 } esp_codec_dev_bus_info_t;
 
 /**
+ * @brief  Committed I2S clock geometry reported to codec drivers
+ *
+ * @note  Both frequencies are nominal values derived from the committed bus configuration,
+ *        not measured outputs; runtime rate tuning is not reflected here.
+ * @note  mclk_hz assumes the I2S controller derives MCLK from mclk_multiple, which holds
+ *        when the controller drives the bus clocks. It is 0 when the bus reports no usable
+ *        multiple; codec drivers must treat 0 as unknown and keep their own configuration.
+ */
+typedef struct {
+    uint32_t  sample_rate;  /*!< Committed sample rate in Hz; 0 means the cache is empty */
+    uint32_t  mclk_hz;      /*!< Nominal MCLK in Hz, equal to sample_rate * mclk_multiple; 0 if unknown */
+    uint32_t  bclk_hz;      /*!< Nominal BCLK in Hz, equal to sample_rate * total_slot * slot_bit */
+    uint8_t   total_slot;   /*!< Number of physical slots on the bus */
+} esp_codec_dev_sys_clk_info_t;
+
+/**
  * @brief  Device-side channel map info (mode + channels → map)
  *
  *         One entry states where the device places its channels in a frame of that width. A frame

@@ -157,6 +157,44 @@ static bool _verify_fs_para(esp_codec_dev_sample_info_t *fs)
     return true;
 }
 
+int codec_dev_apply_sysclk(codec_dev_t *dev)
+{
+    if (dev == NULL || dev->codec_if == NULL) {
+        return ESP_CODEC_DEV_OK;
+    }
+    if (dev->codec_if->hw_base.set_sysclk == NULL) {
+        return ESP_CODEC_DEV_OK;
+    }
+    int ret = audio_hw_set_sysclk(&dev->codec_if->hw_base, NULL);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;  /* helper already logged */
+    }
+    if (dev->data_if == NULL || dev->data_if->get_bus_info == NULL) {
+        return ESP_CODEC_DEV_OK;
+    }
+    esp_codec_dev_type_t dir = dev->output_opened ? ESP_CODEC_DEV_TYPE_OUT : ESP_CODEC_DEV_TYPE_IN;
+    esp_codec_dev_bus_info_t bus = {0};
+    ret = dev->data_if->get_bus_info(dev->data_if, dir, &bus);
+    if (ret == ESP_CODEC_DEV_WRONG_STATE || ret == ESP_CODEC_DEV_NOT_SUPPORT) {
+        return ESP_CODEC_DEV_OK;
+    }
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;  /* get_bus_info already logged */
+    }
+    if (bus.sample_rate == 0 || bus.total_slot == 0 || bus.slot_bit == 0 ||
+        bus.total_frame_bits != (uint16_t)(bus.total_slot * bus.slot_bit)) {
+        ESP_LOGE(TAG, "Apply codec sysclk failed: invalid committed bus");
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    const esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = bus.sample_rate,
+        .mclk_hz = bus.sample_rate * (uint32_t)bus.mclk_multiple,
+        .bclk_hz = bus.sample_rate * (uint32_t)bus.total_frame_bits,
+        .total_slot = bus.total_slot,
+    };
+    return audio_hw_set_sysclk(&dev->codec_if->hw_base, &clk_info);
+}
+
 void codec_dev_apply_vol_mute(codec_dev_t *dev)
 {
     esp_codec_dev_handle_t h = (esp_codec_dev_handle_t)dev;
@@ -274,6 +312,10 @@ int esp_codec_dev_open(esp_codec_dev_handle_t handle, esp_codec_dev_sample_info_
         data_if_enabled = true;
     }
     if (codec) {
+        ret = codec_dev_apply_sysclk(dev);
+        if (ret != ESP_CODEC_DEV_OK) {
+            goto open_cleanup;
+        }
         if (codec->hw_base.set_fs) {
             ret = codec->hw_base.set_fs(&codec->hw_base, &verified_fs, dev->dev_caps);
             if (ret != 0) {
@@ -411,13 +453,22 @@ int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t handle, const esp_codec
                      dir_str, (unsigned long)cur_map.value, (unsigned long)map->value);
         }
         if (need_modify) {
-            int hw_ret = codec_dev_layout_reconfigure_hw(dev, map);
+            esp_codec_dev_sample_info_t hw_fs;
+            int hw_ret = codec_dev_layout_resolve_hw_fs(dev, map, &hw_fs);
             if (hw_ret == ESP_CODEC_DEV_OK) {
+                /* The audio path is touched from here on, so report a failure instead of silently
+                   degrading to software conversion. */
+                hw_ret = codec_dev_layout_reconfigure_hw(dev, map, &hw_fs);
+                if (hw_ret != ESP_CODEC_DEV_OK) {
+                    ESP_LOGE(TAG, "[%s] Failed to reconfigure hardware for layout 0x%lX, ret=0x%x",
+                             dir_str, (unsigned long)map->value, hw_ret);
+                    return hw_ret;
+                }
                 ESP_LOGI(TAG, "[%s] Applied requested layout by reconfiguring hardware, current map=0x%lX",
                          dir_str, (unsigned long)dev->cur_map.value);
                 return ESP_CODEC_DEV_OK;
             }
-            ESP_LOGI(TAG, "[%s] Hardware reconfigure failed, use software layout conversion instead, ret=0x%x, current map=0x%lX, requested map=0x%lX",
+            ESP_LOGI(TAG, "[%s] Hardware cannot express the requested layout, use software layout conversion instead, ret=0x%x, current map=0x%lX, requested map=0x%lX",
                      dir_str, hw_ret, (unsigned long)cur_map.value, (unsigned long)map->value);
         }
     }
@@ -581,6 +632,28 @@ int esp_codec_dev_get_data_layout_label(esp_codec_dev_handle_t handle, char *lab
         ESP_LOGE(TAG, "Failed to convert data layout map to label, ret=0x%x", ret);
     }
     return ret;
+}
+
+int esp_codec_dev_set_adc_label(esp_codec_dev_handle_t handle, const char *label)
+{
+    codec_dev_t *dev = (codec_dev_t *)handle;
+    if (dev == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid handle or label");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev->dev_caps & ESP_CODEC_DEV_TYPE_IN) == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: codec does not support input mode");
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (dev->input_opened) {
+        ESP_LOGE(TAG, "Set ADC label failed: input path is open");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    if (dev->codec_if == NULL) {
+        ESP_LOGE(TAG, "Set ADC label failed: codec interface is missing");
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    return audio_hw_set_adc_label(&dev->codec_if->hw_base, label);
 }
 
 int esp_codec_dev_read(esp_codec_dev_handle_t handle, void *data, int len)
@@ -889,7 +962,6 @@ int esp_codec_dev_set_in_mute(esp_codec_dev_handle_t handle, bool mute)
         }
         return ret;
     }
-    ESP_LOGE(TAG, "Input mute control is not supported");
     return ESP_CODEC_DEV_NOT_SUPPORT;
 }
 

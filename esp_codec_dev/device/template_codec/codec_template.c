@@ -11,6 +11,7 @@
 
 #include "codec_template.h"
 #include "codec_template_reg.h"
+#include "audio_codec_adc_label.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
 #include "esp_codec_dev_vol.h"
@@ -51,7 +52,7 @@ static const char *TAG = "CHIP";
  *    not vtable wrappers. No forward declarations between helpers and callbacks.
  * 2. hw_base callbacks (audio_hw_base.h order):
  *    open -> is_open -> set_fs -> set_reg -> get_reg -> dump -> close ->
- *    get_order_list -> get_adc_label -> get_caps.
+ *    get_order_list -> get_adc_label -> get_caps -> set_sysclk -> set_adc_label.
  * 3. adc ops: enable -> mute -> set_vol.
  * 4. dac ops: enable -> mute -> set_vol.
  * 5. pa_enable.
@@ -545,6 +546,40 @@ static int chip_get_adc_label(const audio_hw_base_t *h, const char **label)
     return ESP_CODEC_DEV_OK;
 }
 
+static int chip_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_chip_t *codec = (audio_codec_chip_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->adc_enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t active_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &active_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 2 || active_mask == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel configuration");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->cfg.adc_cfg.label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
 /* Optional: remove when capability query is not needed.
  * max_channels / fixed.channel is the physical converter count.
  * Do not infer converter count from order_info[].channels.
@@ -725,6 +760,7 @@ const audio_codec_if_t *chip_codec_new(chip_cfg_t *codec_cfg)
     codec->base.hw_base.close = chip_close;
     codec->base.hw_base.get_order_list = chip_get_order_list;
     codec->base.hw_base.get_adc_label = chip_get_adc_label;
+    codec->base.hw_base.set_adc_label = chip_set_adc_label;
     codec->base.hw_base.get_caps = chip_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     chip_save_adc_label(codec, codec_cfg->adc_cfg.label);

@@ -17,6 +17,12 @@
 
 static const char *TAG = "ES8156";
 
+static const uint8_t es8156_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es8156_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 96000,
+};
+
 /**
  * @brief  ES8156 codec driver instance
  */
@@ -286,6 +292,37 @@ static void es8156_dump(const audio_hw_base_t *h)
     codec_reg_dump_end(&dump);
 }
 
+static int es8156_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                           esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE ||
+        (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) == 0) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (caps == NULL || *count == 0) {
+        *count = 1;
+        return ESP_CODEC_DEV_OK;
+    }
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,
+            .bits_per_sample = es8156_cap_bits,
+            .bits_num = sizeof(es8156_cap_bits) / sizeof(es8156_cap_bits[0]),
+            .sample_rates = es8156_cap_rates,
+            .sample_rate_num = sizeof(es8156_cap_rates) / sizeof(es8156_cap_rates[0]),
+        },
+    };
+    caps[0] = dac_caps;
+    *count = 1;
+    return ESP_CODEC_DEV_OK;
+}
+
 const audio_codec_if_t *es8156_codec_new(es8156_codec_cfg_t *codec_cfg)
 {
     if (codec_cfg == NULL || codec_cfg->ctrl_if == NULL) {
@@ -313,6 +350,7 @@ const audio_codec_if_t *es8156_codec_new(es8156_codec_cfg_t *codec_cfg)
     codec->base.hw_base.get_reg = es8156_get_reg;
     codec->base.hw_base.dump_reg = es8156_dump;
     codec->base.hw_base.close = es8156_close;
+    codec->base.hw_base.get_caps = es8156_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
 
     codec->dac_ops.ops.enable = es8156_enable;

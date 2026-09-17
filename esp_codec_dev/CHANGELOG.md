@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Feature
+
+- Added optional `audio_hw_base_t.set_sysclk` and `esp_codec_dev_sys_clk_info_t` so a codec can cache the committed I2S geometry (`sample_rate`, `mclk_hz`, `bclk_hz`, `total_slot`) before `set_fs`.
+- Added `esp_codec_dev_set_adc_label()` to update copied ADC channel labels while the input path is closed.
+- Implemented `audio_hw_base_t.get_caps` for ES7243, ES7243E, ES8156, ES8374, ES8388, AW88298, TAS5805M, ZL38063, and CJC8910.
+
+### Bug Fixed
+
+- Fixed repeated samples on ES8389 in `no_mclk` mode, where adjacent samples on the same channel had the same value. The codec clock now derives from the actual I2S frame width (`total_slot * slot_bit`) instead of the incorrect `bits_per_sample * 4`.
+
 ## v2.0.0-beta5
 
 ### Bug Fixed

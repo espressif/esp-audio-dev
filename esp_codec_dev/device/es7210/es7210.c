@@ -131,7 +131,7 @@ static const esp_codec_dev_device_map_info_t order_info[] = {
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP_8CH(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
 static const uint8_t es7210_cap_bits[] = {16, 24, 32};
@@ -615,6 +615,41 @@ static int es7210_get_adc_label(const audio_hw_base_t *h, const char **label)
     return ESP_CODEC_DEV_OK;
 }
 
+static int es7210_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_es7210_t *codec = (audio_codec_es7210_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t mic_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &mic_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 4 || (mic_mask & 0x0F) == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel count or microphone mask");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->channel_mask = (uint16_t)(mic_mask & 0x0F);
+    codec->cfg.adc_cfg.label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
 static int es7210_get_order_list(const audio_hw_base_t *h, const esp_codec_dev_device_map_info_t **order_list, int *list_size)
 {
     audio_codec_es7210_t *codec = (audio_codec_es7210_t *)h;
@@ -708,6 +743,7 @@ const audio_codec_if_t *es7210_codec_new(es7210_codec_cfg_t *codec_cfg)
     codec->base.hw_base.close = es7210_close;
     codec->base.hw_base.get_order_list = es7210_get_order_list;
     codec->base.hw_base.get_adc_label = es7210_get_adc_label;
+    codec->base.hw_base.set_adc_label = es7210_set_adc_label;
     codec->base.hw_base.get_caps = es7210_get_caps;
 
     codec->base.hw_proc = &hw_proc;

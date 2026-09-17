@@ -34,6 +34,9 @@ struct audio_hw_base_t {
                           const esp_codec_dev_device_map_info_t **order_list, int *list_size);  /*!< Get logical-channel to physical-slot mappings */
     int (*get_caps)(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
                     esp_codec_dev_capability_t *caps, int *count);  /*!< Get codec device capabilities */
+    int (*set_sysclk)(const audio_hw_base_t *h,
+                      const esp_codec_dev_sys_clk_info_t *clk_info);    /*!< Cache committed bus clock geometry */
+    int (*set_adc_label)(const audio_hw_base_t *h, const char *label);  /*!< Set copied ADC channel labels while ADC is disabled */
 };
 
 #ifdef __cplusplus

@@ -10,6 +10,7 @@
 #include "esp_log.h"
 
 #include "es7243_adc.h"
+#include "audio_codec_adc_label.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
 #include "esp_codec_dev_os.h"
@@ -27,6 +28,12 @@ typedef struct {
     bool                enabled;                                /*!< True when ADC path is running */
     char                adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
 } audio_codec_es7243_t;
+
+static const uint8_t es7243_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es7243_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 96000,
+};
 
 static int es7243_write_reg(audio_codec_es7243_t *codec, int reg, int value)
 {
@@ -104,11 +111,7 @@ static int es7243_open(const audio_hw_base_t *h, void *cfg, int cfg_size)
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     memcpy(&codec->cfg, codec_cfg, sizeof(es7243_codec_cfg_t));
-    if (es7243_adc_enable(codec, true)) {
-        ESP_LOGE(TAG, "Fail to write register");
-        return ESP_CODEC_DEV_WRITE_FAIL;
-    }
-    codec->enabled = true;
+    codec->enabled = false;
     codec->is_open = true;
     return ESP_CODEC_DEV_OK;
 }
@@ -236,6 +239,71 @@ static int es7243_get_adc_label(const audio_hw_base_t *h, const char **label)
     return ESP_CODEC_DEV_OK;
 }
 
+static int es7243_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_es7243_t *codec = (audio_codec_es7243_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t active_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &active_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 2 || active_mask == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel configuration");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->cfg.adc_cfg.label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es7243_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                           esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE ||
+        (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_IN) == 0) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (caps == NULL || *count == 0) {
+        *count = 1;
+        return ESP_CODEC_DEV_OK;
+    }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,
+            .bits_per_sample = es7243_cap_bits,
+            .bits_num = sizeof(es7243_cap_bits) / sizeof(es7243_cap_bits[0]),
+            .sample_rates = es7243_cap_rates,
+            .sample_rate_num = sizeof(es7243_cap_rates) / sizeof(es7243_cap_rates[0]),
+        },
+    };
+    caps[0] = adc_caps;
+    *count = 1;
+    return ESP_CODEC_DEV_OK;
+}
+
 static void es7243_save_adc_label(audio_codec_es7243_t *codec, const char *label)
 {
     codec->adc_label[0] = '\0';
@@ -273,6 +341,8 @@ const audio_codec_if_t *es7243_codec_new(es7243_codec_cfg_t *codec_cfg)
     codec->base.hw_base.dump_reg = es7243_dump;
     codec->base.hw_base.close = es7243_close;
     codec->base.hw_base.get_adc_label = es7243_get_adc_label;
+    codec->base.hw_base.set_adc_label = es7243_set_adc_label;
+    codec->base.hw_base.get_caps = es7243_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     es7243_save_adc_label(codec, codec_cfg->adc_cfg.label);
 

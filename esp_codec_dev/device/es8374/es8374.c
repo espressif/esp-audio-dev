@@ -30,6 +30,12 @@ typedef struct {
     float               hw_gain;      /*!< Cached hardware gain in dB */
 } audio_codec_es8374_t;
 
+static const uint8_t es8374_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es8374_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 96000,
+};
+
 static const esp_codec_dev_vol_range_t vol_range = {
     .min_vol = {
         .vol = 0xC0,
@@ -770,6 +776,63 @@ static void es8374_dump(const audio_hw_base_t *h)
     codec_reg_dump_end(&dump);
 }
 
+static int es8374_copy_caps(const esp_codec_dev_capability_t *src_caps, int src_count,
+                            esp_codec_dev_capability_t *out_caps, int *out_count)
+{
+    if (out_caps == NULL || *out_count == 0) {
+        *out_count = src_count;
+        return ESP_CODEC_DEV_OK;
+    }
+    if (*out_count < src_count) {
+        *out_count = src_count;
+        return ESP_CODEC_DEV_NO_MEM;
+    }
+    for (int i = 0; i < src_count; i++) {
+        out_caps[i] = src_caps[i];
+    }
+    *out_count = src_count;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es8374_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                           esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE || (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 1,
+            .bits_per_sample = es8374_cap_bits,
+            .bits_num = sizeof(es8374_cap_bits) / sizeof(es8374_cap_bits[0]),
+            .sample_rates = es8374_cap_rates,
+            .sample_rate_num = sizeof(es8374_cap_rates) / sizeof(es8374_cap_rates[0]),
+        },
+    };
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 1,
+            .bits_per_sample = es8374_cap_bits,
+            .bits_num = sizeof(es8374_cap_bits) / sizeof(es8374_cap_bits[0]),
+            .sample_rates = es8374_cap_rates,
+            .sample_rate_num = sizeof(es8374_cap_rates) / sizeof(es8374_cap_rates[0]),
+        },
+    };
+    if (dev_type == ESP_CODEC_DEV_TYPE_IN) {
+        return es8374_copy_caps(&adc_caps, 1, caps, count);
+    }
+    if (dev_type == ESP_CODEC_DEV_TYPE_OUT) {
+        return es8374_copy_caps(&dac_caps, 1, caps, count);
+    }
+    const esp_codec_dev_capability_t in_out_caps[] = {adc_caps, dac_caps};
+    return es8374_copy_caps(in_out_caps, 2, caps, count);
+}
+
 const audio_codec_if_t *es8374_codec_new(es8374_codec_cfg_t *codec_cfg)
 {
     if (codec_cfg == NULL || codec_cfg->ctrl_if == NULL) {
@@ -797,6 +860,7 @@ const audio_codec_if_t *es8374_codec_new(es8374_codec_cfg_t *codec_cfg)
     codec->base.hw_base.set_reg = es8374_set_reg;
     codec->base.hw_base.get_reg = es8374_get_reg;
     codec->base.hw_base.dump_reg = es8374_dump;
+    codec->base.hw_base.get_caps = es8374_get_caps;
     codec->base.hw_base.close = es8374_close;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
 

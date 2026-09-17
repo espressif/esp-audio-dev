@@ -80,6 +80,9 @@ typedef struct {
 #define ES8389_TEST_BOARD_I2C_SCL_SPEED_HZ  (0)
 #endif  /* CONFIG_IDF_TARGET_ESP32S31 */
 
+/* Drop the ADC/I2S start transient before structure analysis. */
+#define ES8389_RECORD_WARMUP_MS  (500)
+
 static const codec_i2c_pin_t s_es8389_i2c_pin = {
     .scl = ES8389_TEST_BOARD_I2C_SCL_PIN,
     .sda = ES8389_TEST_BOARD_I2C_SDA_PIN,
@@ -295,6 +298,25 @@ static void pcm_mono_to_stereo_16bit(const uint8_t *src, int src_size, uint8_t *
     }
 }
 
+static uint8_t *alloc_es8389_record_buf(int total_bytes)
+{
+    uint8_t *record_buf = (uint8_t *)heap_caps_malloc(total_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (record_buf == NULL) {
+        record_buf = (uint8_t *)malloc(total_bytes);
+    }
+    return record_buf;
+}
+
+static void analyze_es8389_recorded_pcm(const uint8_t *buf, int len, int chunk_bytes,
+                                        int sample_rate, int channel, int bits_per_sample)
+{
+    int bytes_per_sample = bits_per_sample >> 3;
+    int warmup_bytes = (sample_rate * ES8389_RECORD_WARMUP_MS / 1000) * channel * bytes_per_sample;
+    TEST_ASSERT_GREATER_THAN(warmup_bytes, len);
+    TEST_ESP_OK(test_analyze_recorded_pcm(buf + warmup_bytes, len - warmup_bytes,
+                                          chunk_bytes, channel, bits_per_sample));
+}
+
 static void test_case_es8389_separate_play_record_play_with_isolated_interfaces(void)
 {
     int ret = ut_i2c_init(0, (codec_i2c_pin_t *)&s_es8389_i2c_pin);
@@ -346,10 +368,7 @@ static void test_case_es8389_separate_play_record_play_with_isolated_interfaces(
     TEST_ESP_OK(ret);
     deinit_codec_inst(&play_inst, true);
 
-    uint8_t *record_buf = (uint8_t *)heap_caps_malloc(total_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (record_buf == NULL) {
-        record_buf = (uint8_t *)malloc(total_bytes);
-    }
+    uint8_t *record_buf = alloc_es8389_record_buf(total_bytes);
     TEST_ASSERT_NOT_NULL(record_buf);
 
     codec_inst_t record_inst = {0};
@@ -364,12 +383,10 @@ static void test_case_es8389_separate_play_record_play_with_isolated_interfaces(
         ret = esp_codec_dev_read(record_inst.codec_dev, record_buf + recorded, once);
         test_print_pcm_s16_head(record_buf + recorded, 4);
         TEST_ESP_OK(ret);
-        int max_sample = 0;
-        int min_sample = 0;
-        codec_max_sample(record_buf + recorded, once, &max_sample, &min_sample);
-        TEST_ASSERT(max_sample > min_sample);
         recorded += once;
     }
+    analyze_es8389_recorded_pcm(record_buf, recorded, chunk_bytes,
+                                sample_rate, channel, bits_per_sample);
     ret = esp_codec_dev_close(record_inst.codec_dev);
     TEST_ESP_OK(ret);
     deinit_codec_inst(&record_inst, true);
@@ -431,24 +448,22 @@ static void test_case_es8389_record_while_playing_with_isolated_interfaces(void)
     TEST_ESP_OK(ret);
     esp_codec_dev_sleep(100);
 
-    uint8_t *stereo_chunk = (uint8_t *)malloc(chunk_bytes);
-    TEST_ASSERT_NOT_NULL(stereo_chunk);
+    uint8_t *record_buf = alloc_es8389_record_buf(total_bytes);
+    TEST_ASSERT_NOT_NULL(record_buf);
 
     int processed = 0;
     while (processed < total_bytes) {
         int once = (total_bytes - processed > chunk_bytes) ? chunk_bytes : (total_bytes - processed);
-        ret = esp_codec_dev_read(record_inst.codec_dev, stereo_chunk, once);
-        test_print_pcm_s16_head(stereo_chunk, 4);
+        ret = esp_codec_dev_read(record_inst.codec_dev, record_buf + processed, once);
+        test_print_pcm_s16_head(record_buf + processed, 4);
         TEST_ESP_OK(ret);
-        int max_sample = 0;
-        int min_sample = 0;
-        codec_max_sample(stereo_chunk, once, &max_sample, &min_sample);
-        TEST_ASSERT(max_sample > min_sample);
+        ret = esp_codec_dev_write(play_inst.codec_dev, record_buf + processed, once);
+        TEST_ESP_OK(ret);
         processed += once;
-        ret = esp_codec_dev_write(play_inst.codec_dev, stereo_chunk, once);
-        TEST_ESP_OK(ret);
     }
-    free(stereo_chunk);
+    analyze_es8389_recorded_pcm(record_buf, processed, chunk_bytes,
+                                sample_rate, channel, bits_per_sample);
+    free(record_buf);
 
     ret = esp_codec_dev_close(record_inst.codec_dev);
     TEST_ESP_OK(ret);

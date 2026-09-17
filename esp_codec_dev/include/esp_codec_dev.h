@@ -84,8 +84,10 @@ int esp_codec_dev_get_caps(esp_codec_dev_handle_t codec, esp_codec_dev_capabilit
 /**
  * @brief  Set codec memory data layout
  *
- * @note  If the requested layout cannot be applied by hardware settings, read/write will use
+ * @note  If the requested layout cannot be expressed by a hardware bus format, read/write will use
  *        software layout conversion. In that case, read/write lengths must be full-frame aligned.
+ *        A layout that hardware can express but fails to apply is reported as an error; the device
+ *        does not fall back to software conversion in that case.
  * @note  For capture (input), this sets the desired channel order in memory after selecting
  *        samples from the bus. For playback (output), it sets the logical order stored in memory;
  *        when it differs from the bus order, software reordering is used on read/write.
@@ -100,7 +102,8 @@ int esp_codec_dev_get_caps(esp_codec_dev_handle_t codec, esp_codec_dev_capabilit
  *       - ESP_CODEC_DEV_OK           Set layout success
  *       - ESP_CODEC_DEV_INVALID_ARG  Invalid arguments
  *       - ESP_CODEC_DEV_NOT_SUPPORT  Codec not support
- *       - ESP_CODEC_DEV_WRONG_STATE  Codec device not opened yet
+ *       - ESP_CODEC_DEV_WRONG_STATE  Device is not open
+ *       - ESP_CODEC_DEV_DRV_ERR      Hardware reconfigure for the requested layout failed
  */
 int esp_codec_dev_set_data_layout(esp_codec_dev_handle_t codec, const esp_codec_dev_channel_map_t *map);
 
@@ -162,6 +165,23 @@ int esp_codec_dev_set_data_layout_label(esp_codec_dev_handle_t codec, const char
  *       - ESP_CODEC_DEV_NOT_SUPPORT  Codec/data interface not support
  */
 int esp_codec_dev_get_data_layout_label(esp_codec_dev_handle_t codec, char *label, int label_size);
+
+/**
+ * @brief  Set ADC physical channel labels
+ *
+ * @note  The input path must be closed. The codec copies @p label before returning.
+ *        This API is not ISR-safe and must not run concurrently with open, close, or read.
+ *
+ * @param[in]  codec  Codec device handle
+ * @param[in]  label  Non-empty ADC label list, such as "FL,NA,FR,RE"
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           On success
+ *       - ESP_CODEC_DEV_INVALID_ARG  codec or label is NULL, or label is invalid
+ *       - ESP_CODEC_DEV_NOT_SUPPORT  Handle has no input path or codec has no setter
+ *       - ESP_CODEC_DEV_WRONG_STATE  Input path is open or shared codec ADC is active
+ */
+int esp_codec_dev_set_adc_label(esp_codec_dev_handle_t codec, const char *label);
 
 /**
  * @brief  Read data from codec

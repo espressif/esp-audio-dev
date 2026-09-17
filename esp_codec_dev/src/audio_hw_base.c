@@ -83,3 +83,19 @@ int audio_hw_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
     ESP_RETURN_ON_FALSE(h->get_caps, ESP_CODEC_DEV_NOT_SUPPORT, TAG, "Not supported");
     return h->get_caps(h, dev_type, caps, count);
 }
+
+int audio_hw_set_sysclk(const audio_hw_base_t *h, const esp_codec_dev_sys_clk_info_t *clk_info)
+{
+    ESP_RETURN_ON_FALSE(h, ESP_CODEC_DEV_INVALID_ARG, TAG, "Set sysclk failed: handle is NULL");
+    if (h->set_sysclk == NULL) {
+        return ESP_CODEC_DEV_OK;
+    }
+    return h->set_sysclk(h, clk_info);
+}
+
+int audio_hw_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    ESP_RETURN_ON_FALSE(h && label, ESP_CODEC_DEV_INVALID_ARG, TAG, "Set ADC label failed: invalid handle or label");
+    ESP_RETURN_ON_FALSE(h->set_adc_label, ESP_CODEC_DEV_NOT_SUPPORT, TAG, "Set ADC label failed: not supported");
+    return h->set_adc_label(h, label);
+}

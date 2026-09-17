@@ -14,10 +14,15 @@
 #include "audio_codec_if.h"
 #include "audio_hw_base.h"
 #include "es7210_adc.h"
+#include "es7243_adc.h"
+#include "es7243e_adc.h"
 #include "es8311_codec.h"
 #include "es8389_codec.h"
 
-#define TEST_CTRL_REG_COUNT  (256)
+#define TEST_CTRL_REG_COUNT              (256)
+#define TEST_ES8389_CLK_REG05            (0x05)
+#define TEST_ES8389_RATIO32_AT_8K_REG05  (0x57)
+#define TEST_ES8389_RATIO64_AT_8K_REG05  (0x4D)
 
 typedef struct {
     audio_codec_ctrl_if_t    base;
@@ -235,7 +240,7 @@ static void assert_codec_tdm_order_rows(const audio_codec_if_t *codec_if)
         {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
         {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
         {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
-        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP_8CH(1, 3, 5, 7, 2, 4, 6, 8)}},
     };
     const esp_codec_dev_device_map_info_t *rows = NULL;
     int row_count = 0;
@@ -305,6 +310,214 @@ static void test_es8389_order_table_has_expected_tdm_rows(void)
     const audio_codec_if_t *codec_if = es8389_codec_new(&cfg);
     TEST_ASSERT_NOT_NULL(codec_if);
     assert_codec_tdm_order_rows(codec_if);
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8311_no_mclk_falls_back_to_low_rate_ratio(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8311_CODEC_DEFAULT_ADDR);
+    es8311_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8311_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_sysclk);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 8000,
+        .mclk_hz = 2048000,
+        .bclk_hz = 512000,
+        .total_slot = 2,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 8000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8311_no_mclk_rejects_sample_rate_mismatch(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8311_CODEC_DEFAULT_ADDR);
+    es8311_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8311_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 8000,
+        .mclk_hz = 2048000,
+        .bclk_hz = 512000,
+        .total_slot = 2,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8311_set_sysclk_null_uses_legacy_low_rate_fallback(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8311_CODEC_DEFAULT_ADDR);
+    es8311_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8311_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 16000,
+        .mclk_hz = 4096000,
+        .bclk_hz = 2048000,
+        .total_slot = 4,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, NULL));
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 8000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8389_no_mclk_uses_bus_frame_ratio(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8389_CODEC_DEFAULT_ADDR);
+    es8389_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8389_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_sysclk);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 8000,
+        .mclk_hz = 2048000,
+        .bclk_hz = 256000,
+        .total_slot = 2,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 8000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    TEST_ASSERT_EQUAL_HEX8(TEST_ES8389_RATIO32_AT_8K_REG05, ctrl.reg[TEST_ES8389_CLK_REG05]);
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8389_set_sysclk_null_uses_legacy_frame_ratio(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8389_CODEC_DEFAULT_ADDR);
+    es8389_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8389_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 8000,
+        .mclk_hz = 2048000,
+        .bclk_hz = 256000,
+        .total_slot = 2,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, NULL));
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 8000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    TEST_ASSERT_EQUAL_HEX8(TEST_ES8389_RATIO64_AT_8K_REG05, ctrl.reg[TEST_ES8389_CLK_REG05]);
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8389_no_mclk_rejects_sample_rate_mismatch(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8389_CODEC_DEFAULT_ADDR);
+    es8389_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .sys_cfg = {
+            .no_mclk = true,
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8389_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+
+    esp_codec_dev_sys_clk_info_t clk_info = {
+        .sample_rate = 8000,
+        .mclk_hz = 2048000,
+        .bclk_hz = 256000,
+        .total_slot = 2,
+    };
+    TEST_ESP_OK(codec_if->hw_base.set_sysclk(&codec_if->hw_base, &clk_info));
+    uint8_t reg05_before = ctrl.reg[TEST_ES8389_CLK_REG05];
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .mclk_multiple = 256,
+    };
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_fs(&codec_if->hw_base, &fs, ESP_CODEC_DEV_TYPE_IN_OUT));
+    TEST_ASSERT_EQUAL_HEX8(reg05_before, ctrl.reg[TEST_ES8389_CLK_REG05]);
     audio_codec_delete_codec_if(codec_if);
 }
 
@@ -404,6 +617,195 @@ static void test_data_if_get_bus_info_rejects_invalid_arguments(void)
                       data_if.base.get_bus_info(&data_if.base, ESP_CODEC_DEV_TYPE_OUT, NULL));
 }
 
+#define TEST_ES7210_MIC1_GAIN_REG   (0x43)
+#define TEST_ES7210_MIC2_GAIN_REG   (0x44)
+#define TEST_ES7210_MIC3_GAIN_REG   (0x45)
+#define TEST_ES7210_MIC4_GAIN_REG   (0x46)
+#define TEST_ES7210_MIC_ENABLE_BIT  (0x10)
+
+static void test_es7210_set_adc_label_updates_mask_without_partial_writes(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES7210_CODEC_DEFAULT_ADDR);
+    es7210_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .adc_cfg = {
+            .label = "FL,FR,NA,NA",
+        },
+    };
+    const audio_codec_if_t *codec_if = es7210_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_adc_label);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.get_adc_label);
+
+    const char *label = NULL;
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR,NA,NA", label);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "NA,NA,NA,NA"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR,NA,NA", label);
+
+    char overlong[AUDIO_HW_ADC_LABEL_MAX_LEN + 8];
+    memset(overlong, 'A', sizeof(overlong) - 1);
+    overlong[sizeof(overlong) - 1] = '\0';
+    overlong[0] = 'F';
+    overlong[1] = 'L';
+    overlong[2] = ',';
+    overlong[3] = 'F';
+    overlong[4] = 'R';
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, overlong));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR,NA,NA", label);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,FR,SL,SR,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR,NA,NA", label);
+
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,NA,FR,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,NA,FR,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, true));
+    TEST_ASSERT_TRUE((ctrl.reg[TEST_ES7210_MIC1_GAIN_REG] & TEST_ES7210_MIC_ENABLE_BIT) != 0);
+    TEST_ASSERT_TRUE((ctrl.reg[TEST_ES7210_MIC2_GAIN_REG] & TEST_ES7210_MIC_ENABLE_BIT) == 0);
+    TEST_ASSERT_TRUE((ctrl.reg[TEST_ES7210_MIC3_GAIN_REG] & TEST_ES7210_MIC_ENABLE_BIT) != 0);
+    TEST_ASSERT_TRUE((ctrl.reg[TEST_ES7210_MIC4_GAIN_REG] & TEST_ES7210_MIC_ENABLE_BIT) != 0);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,FR,NA,NA"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,NA,FR,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, false));
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es8311_set_adc_label_metadata_only(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES8311_CODEC_DEFAULT_ADDR);
+    es8311_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .adc_cfg = {
+            .label = "FL,FR",
+        },
+        .pa_cfg = {
+            .pa_pin = -1,
+        },
+    };
+    const audio_codec_if_t *codec_if = es8311_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_adc_label);
+
+    const char *label = NULL;
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,FR,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FR,FL"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, false));
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es7243_set_adc_label_before_first_stream(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES7243_CODEC_DEFAULT_ADDR);
+    es7243_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .adc_cfg = {
+            .label = "FL,FR",
+        },
+    };
+    const audio_codec_if_t *codec_if = es7243_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_adc_label);
+
+    const char *label = NULL;
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "NA,NA"));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,FR,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FR,FL"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, false));
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FR,FL"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FR,FL", label);
+    audio_codec_delete_codec_if(codec_if);
+}
+
+static void test_es7243e_set_adc_label_before_first_stream(void)
+{
+    test_codec_ctrl_t ctrl = {0};
+    test_codec_ctrl_init(&ctrl, ES7243E_CODEC_DEFAULT_ADDR);
+    es7243e_codec_cfg_t cfg = {
+        .ctrl_if = &ctrl.base,
+        .adc_cfg = {
+            .label = "FL,FR",
+        },
+    };
+    const audio_codec_if_t *codec_if = es7243e_codec_new(&cfg);
+    TEST_ASSERT_NOT_NULL(codec_if);
+    TEST_ASSERT_NOT_NULL(codec_if->hw_base.set_adc_label);
+
+    const char *label = NULL;
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "NA,NA"));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,FR,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FL,RE"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, true));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE,
+                      codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FR,FL"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", label);
+
+    TEST_ESP_OK(codec_if->adc_if->ops.enable(codec_if, false));
+    TEST_ESP_OK(codec_if->hw_base.set_adc_label(&codec_if->hw_base, "FR,FL"));
+    TEST_ESP_OK(codec_if->hw_base.get_adc_label(&codec_if->hw_base, &label));
+    TEST_ASSERT_EQUAL_STRING("FR,FL", label);
+    audio_codec_delete_codec_if(codec_if);
+}
+
 TEST_CASE("es7210 order table has expected tdm rows", "[mock][bus_if][codec]")
 {
     test_es7210_order_table_has_expected_tdm_rows();
@@ -417,6 +819,36 @@ TEST_CASE("es8311 order table has expected tdm rows", "[mock][bus_if][codec]")
 TEST_CASE("es8389 order table has expected tdm rows", "[mock][bus_if][codec]")
 {
     test_es8389_order_table_has_expected_tdm_rows();
+}
+
+TEST_CASE("es8311 no_mclk falls back to low rate ratio", "[mock][bus_if][codec]")
+{
+    test_es8311_no_mclk_falls_back_to_low_rate_ratio();
+}
+
+TEST_CASE("es8311 no_mclk rejects sample rate mismatch", "[mock][bus_if][codec]")
+{
+    test_es8311_no_mclk_rejects_sample_rate_mismatch();
+}
+
+TEST_CASE("es8311 set_sysclk null uses legacy low rate fallback", "[mock][bus_if][codec]")
+{
+    test_es8311_set_sysclk_null_uses_legacy_low_rate_fallback();
+}
+
+TEST_CASE("es8389 no_mclk uses bus frame ratio", "[mock][bus_if][codec]")
+{
+    test_es8389_no_mclk_uses_bus_frame_ratio();
+}
+
+TEST_CASE("es8389 set_sysclk null uses legacy frame ratio", "[mock][bus_if][codec]")
+{
+    test_es8389_set_sysclk_null_uses_legacy_frame_ratio();
+}
+
+TEST_CASE("es8389 no_mclk rejects sample rate mismatch", "[mock][bus_if][codec]")
+{
+    test_es8389_no_mclk_rejects_sample_rate_mismatch();
 }
 
 TEST_CASE("data if map query registration is directional", "[mock][bus_if]")
@@ -437,4 +869,24 @@ TEST_CASE("data if bus info query is directional", "[mock][bus_if]")
 TEST_CASE("data if bus info query rejects invalid arguments", "[mock][bus_if]")
 {
     test_data_if_get_bus_info_rejects_invalid_arguments();
+}
+
+TEST_CASE("es7210 set_adc_label updates mask without partial writes", "[mock][bus_if][codec][adc_label]")
+{
+    test_es7210_set_adc_label_updates_mask_without_partial_writes();
+}
+
+TEST_CASE("es8311 set_adc_label metadata only", "[mock][bus_if][codec][adc_label]")
+{
+    test_es8311_set_adc_label_metadata_only();
+}
+
+TEST_CASE("es7243 set_adc_label works before first stream", "[mock][bus_if][codec][adc_label]")
+{
+    test_es7243_set_adc_label_before_first_stream();
+}
+
+TEST_CASE("es7243e set_adc_label works before first stream", "[mock][bus_if][codec][adc_label]")
+{
+    test_es7243e_set_adc_label_before_first_stream();
 }
