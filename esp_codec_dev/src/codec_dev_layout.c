@@ -653,8 +653,12 @@ int codec_dev_layout_get_app_map(codec_dev_t *dev, esp_codec_dev_channel_map_t *
     return ESP_CODEC_DEV_NOT_FOUND;
 }
 
-int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map)
+int codec_dev_layout_resolve_hw_fs(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map,
+                                   esp_codec_dev_sample_info_t *hw_fs)
 {
+    if (dev == NULL || map == NULL || hw_fs == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
     if (dev->input_opened == false && dev->output_opened == false) {
         ESP_LOGE(TAG, "Codec device is not open");
         return ESP_CODEC_DEV_NOT_SUPPORT;
@@ -679,7 +683,19 @@ int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channe
     if (ret != ESP_CODEC_DEV_OK) {
         return ret;
     }
-    if (new_ch_mask == dev->fs.channel_mask && new_ch_num == dev->fs.channel) {
+    *hw_fs = dev->fs;
+    hw_fs->channel_mask = new_ch_mask;
+    hw_fs->channel = new_ch_num;
+    return ESP_CODEC_DEV_OK;
+}
+
+int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map,
+                                    const esp_codec_dev_sample_info_t *hw_fs)
+{
+    if (dev == NULL || map == NULL || hw_fs == NULL || dev->data_if == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (hw_fs->channel_mask == dev->fs.channel_mask && hw_fs->channel == dev->fs.channel) {
         dev->set_map = *map;
         dev->cur_map = *map;
         return ESP_CODEC_DEV_OK;
@@ -688,13 +704,12 @@ int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channe
     const audio_codec_if_t *codec = dev->codec_if;
     const audio_codec_data_if_t *data_if = dev->data_if;
     esp_codec_dev_sample_info_t old_fs = dev->fs;
-    esp_codec_dev_sample_info_t new_fs = dev->fs;
-    new_fs.channel_mask = new_ch_mask;
-    new_fs.channel = new_ch_num;
+    esp_codec_dev_sample_info_t new_fs = *hw_fs;
     bool adc_enabled = false;
     bool dac_enabled = false;
     bool data_if_enabled = false;
-    ESP_LOGI(TAG, "Reconfigure hardware to ch_num=%d and ch_mask=0x%x", new_ch_num, new_ch_mask);
+    int ret = ESP_CODEC_DEV_OK;
+    ESP_LOGI(TAG, "Reconfigure hardware to ch_num=%d and ch_mask=0x%x", new_fs.channel, new_fs.channel_mask);
 
     /* Logical close: disable codec and data_if */
     if (codec) {
@@ -728,6 +743,10 @@ int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channe
         }
         data_if_enabled = true;
     }
+    ret = codec_dev_apply_sysclk(dev);
+    if (ret != ESP_CODEC_DEV_OK) {
+        goto reconfig_rollback;
+    }
     if (codec && codec->hw_base.set_fs) {
         ret = codec->hw_base.set_fs(&codec->hw_base, &new_fs, dev->dev_caps);
         if (ret != 0) {
@@ -756,8 +775,8 @@ int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channe
     codec_dev_apply_vol_mute(dev);
     dev->set_map = *map;
     dev->cur_map = *map;
-    ESP_LOGI(TAG, "Applied map 0x%lX with ch_num=%d, ch_mask=0x%x, mode=%s",
-             (unsigned long)map->value, new_ch_num, (unsigned)new_ch_mask, codec_dev_i2s_mode_name(data_mode));
+    ESP_LOGI(TAG, "Applied map 0x%lX with ch_num=%d, ch_mask=0x%x",
+             (unsigned long)map->value, new_fs.channel, (unsigned)new_fs.channel_mask);
     return ESP_CODEC_DEV_OK;
 
 reconfig_rollback:
@@ -772,24 +791,44 @@ reconfig_rollback:
     if (data_if_enabled && data_if->enable) {
         data_if->enable(data_if, dev->dev_caps, false);
     }
+
+    /* Restore is best effort: the request already failed, so the return value is `ret` either way.
+       Track the bus only to avoid programming the codec on a bus that stayed broken. */
+    bool bus_restored = true;
     if (data_if->set_fmt) {
-        data_if->set_fmt(data_if, dev->dev_caps, &old_fs);
+        int fmt_ret = data_if->set_fmt(data_if, dev->dev_caps, &old_fs);
+        if (fmt_ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Reconfigure rollback failed: restore format ret=%d", fmt_ret);
+            bus_restored = false;
+        }
     }
-    if (codec && codec->hw_base.set_fs) {
-        codec->hw_base.set_fs(&codec->hw_base, &old_fs, dev->dev_caps);
-    }
-    if (data_if->enable) {
-        data_if->enable(data_if, dev->dev_caps, true);
+    if (bus_restored && data_if->enable) {
+        int enable_ret = data_if->enable(data_if, dev->dev_caps, true);
+        if (enable_ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Reconfigure rollback failed: restore enable ret=%d", enable_ret);
+            bus_restored = false;
+        }
     }
     if (codec) {
-        if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
-            codec->adc_if->ops.enable(codec, true);
-        }
-        if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
-            codec->dac_if->ops.enable(codec, true);
+        /* Refresh from the live bus even when restore failed, so the codec never keeps a cached
+           frame length that no longer matches the bus. */
+        codec_dev_apply_sysclk(dev);
+        if (bus_restored) {
+            if (codec->hw_base.set_fs) {
+                codec->hw_base.set_fs(&codec->hw_base, &old_fs, dev->dev_caps);
+            }
+            if (dev->input_opened && codec->adc_if && codec->adc_if->ops.enable) {
+                codec->adc_if->ops.enable(codec, true);
+            }
+            if (dev->output_opened && codec->dac_if && codec->dac_if->ops.enable) {
+                codec->dac_if->ops.enable(codec, true);
+            }
         }
     }
-    return ret == ESP_CODEC_DEV_OK ? ESP_CODEC_DEV_DRV_ERR : ret;
+    if (bus_restored == false) {
+        ESP_LOGE(TAG, "Reconfigure rollback left the audio path down, close and reopen the device");
+    }
+    return ret;
 }
 
 int codec_dev_layout_read(codec_dev_t *dev, void *data, int len)

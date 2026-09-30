@@ -14,6 +14,7 @@
 #include "es8311_codec.h"
 #include "es8311_reg.h"
 #include "audio_codec_ctrl_ref.h"
+#include "audio_codec_adc_label.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
 #include "esp_codec_dev_os.h"
@@ -25,19 +26,24 @@ static const char *TAG = "ES8311";
 #define ES8311_DEBUG_VERIFY_REG_RW  0
 #endif  /* ES8311_DEBUG_VERIFY_REG_RW */
 
+#define ES8311_NO_MCLK_DEFAULT_DIV      (64)
+#define ES8311_NO_MCLK_LOW_RATE_DIV     (128)
+#define ES8311_NO_MCLK_LOW_RATE_MAX_HZ  (16000)
+
 /**
  * @brief  ES8311 codec driver instance
  */
 typedef struct {
-    audio_codec_if_t    base;                                   /*!< Codec interface vtable container */
-    audio_hw_adc_if_t   adc_ops;                                /*!< ADC operation callbacks */
-    audio_hw_dac_if_t   dac_ops;                                /*!< DAC operation callbacks */
-    es8311_codec_cfg_t  cfg;                                    /*!< Board configuration snapshot */
-    bool                is_open;                                /*!< True after open completes */
-    bool                adc_enabled;                            /*!< True when ADC path is running */
-    bool                dac_enabled;                            /*!< True when DAC path is running */
-    float               hw_gain;                                /*!< Cached hardware gain in dB */
-    char                adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
+    audio_codec_if_t              base;                                   /*!< Codec interface vtable container */
+    audio_hw_adc_if_t             adc_ops;                                /*!< ADC operation callbacks */
+    audio_hw_dac_if_t             dac_ops;                                /*!< DAC operation callbacks */
+    es8311_codec_cfg_t            cfg;                                    /*!< Board configuration snapshot */
+    bool                          is_open;                                /*!< True after open completes */
+    bool                          adc_enabled;                            /*!< True when ADC path is running */
+    bool                          dac_enabled;                            /*!< True when DAC path is running */
+    float                         hw_gain;                                /*!< Cached hardware gain in dB */
+    esp_codec_dev_sys_clk_info_t  clk_info;                               /*!< Cached bus clock; sample_rate 0 means empty */
+    char                          adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];  /*!< ADC label for multi-instance routing */
 } audio_codec_es8311_t;
 
 /**
@@ -187,7 +193,7 @@ static const esp_codec_dev_device_map_info_t order_info[] = {
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
     {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
-    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}},
+    {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP_8CH(1, 3, 5, 7, 2, 4, 6, 8)}},
 };
 
 static const uint8_t es8311_cap_bits[] = {16, 24, 32};
@@ -484,17 +490,17 @@ static int es8311_pa_enable(const audio_codec_if_t *h, bool enable)
     return ESP_CODEC_DEV_OK;
 }
 
-static int es8311_config_sample(audio_codec_es8311_t *codec, int sample_rate, uint16_t mclk_multiple)
+static int es8311_config_sample(audio_codec_es8311_t *codec, int sample_rate, uint32_t sysclk_hz)
 {
     int datmp, regv;
-    int mclk_freq = sample_rate * mclk_multiple;
-    int coeff = get_coeff(mclk_freq, sample_rate);
+    int coeff = get_coeff(sysclk_hz, sample_rate);
     if (coeff < 0) {
-        ESP_LOGE(TAG, "Unable to configure sample rate %dHz with %dHz MCLK", sample_rate, mclk_freq);
+        ESP_LOGE(TAG, "Unable to configure sample rate %dHz with %luHz system clock",
+                 sample_rate, (unsigned long)sysclk_hz);
         return ESP_CODEC_DEV_NOT_SUPPORT;
     }
-    ESP_LOGD(TAG, "config_sample: sample_rate: %dHz, mclk_multiple: %d, mclk: %dHz, coeff: %d",
-             sample_rate, mclk_multiple, mclk_freq, coeff);
+    ESP_LOGD(TAG, "config_sample: sample_rate: %dHz, sysclk: %luHz, coeff: %d",
+             sample_rate, (unsigned long)sysclk_hz, coeff);
     bool use_mclk = !codec->cfg.sys_cfg.no_mclk;
     int ret = ESP_CODEC_DEV_OK;
     ret |= es8311_read_reg(codec, ES8311_CLK_MANAGER_REG02, &regv);
@@ -518,12 +524,20 @@ static int es8311_config_sample(audio_codec_es8311_t *codec, int sample_rate, ui
             break;
     }
     if (use_mclk == false) {
+        /* 32fs (2 slots x 16 bits) at 8 kHz and 16 kHz uses BCLK x8.
+         * This path requires a 1.8 V supply. At 3.3 V the multiplied clock
+         * can intermittently lose lock, so samples are occasionally repeated
+         * or dropped. */
         datmp = 3;
         if (sample_rate == 8000) {
-            /* When the sample rate is 8kHz, BCLK requires at least 512K (slot bit needs to be configured to 32bit).
-                DIG_MCLK = LRCK * 256 = BCLK * 4 */
-            datmp = 2;
+            uint32_t frame_bits = 64;
+            if (codec->clk_info.bclk_hz != 0) {
+                frame_bits = codec->clk_info.bclk_hz / (uint32_t)sample_rate;
+            }
+            /* 32-bit frame: BCLK x8. 64-bit frame: BCLK is already 512 kHz, so x4. */
+            datmp = (frame_bits <= 32) ? 3 : 2;
         }
+        ESP_LOGD(TAG, "datmp: %d", datmp);
     }
     regv |= (datmp) << 3;
     ret |= es8311_write_reg(codec, ES8311_CLK_MANAGER_REG02, regv);
@@ -680,6 +694,7 @@ static int es8311_close(const audio_hw_base_t *h)
         }
         codec->adc_enabled = false;
         codec->dac_enabled = false;
+        memset(&codec->clk_info, 0, sizeof(codec->clk_info));
         codec->is_open = false;
     }
     return ESP_CODEC_DEV_OK;
@@ -694,14 +709,37 @@ static bool es8311_is_open(const audio_hw_base_t *h)
     return codec->is_open;
 }
 
+static int es8311_set_sysclk(const audio_hw_base_t *h, const esp_codec_dev_sys_clk_info_t *clk_info)
+{
+    audio_codec_es8311_t *codec = (audio_codec_es8311_t *)h;
+    if (codec == NULL) {
+        ESP_LOGE(TAG, "Set codec clock failed: handle is NULL");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (clk_info == NULL) {
+        memset(&codec->clk_info, 0, sizeof(codec->clk_info));
+        return ESP_CODEC_DEV_OK;
+    }
+    if (codec->is_open == false) {
+        ESP_LOGE(TAG, "Set codec clock failed: codec is not open");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    if (clk_info->sample_rate == 0 || clk_info->total_slot == 0 || clk_info->bclk_hz == 0) {
+        ESP_LOGE(TAG, "Set codec clock failed: invalid clock geometry");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    codec->clk_info = *clk_info;
+    return ESP_CODEC_DEV_OK;
+}
+
 static int es8311_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t *fs, esp_codec_dev_type_t type)
 {
     (void)type;
     audio_codec_es8311_t *codec = (audio_codec_es8311_t *)h;
     if (codec == NULL || codec->is_open == false || fs == NULL) {
+        ESP_LOGE(TAG, "Set codec format failed: invalid argument");
         return ESP_CODEC_DEV_INVALID_ARG;
     }
-    uint16_t mclk_multiple = fs->mclk_multiple ? fs->mclk_multiple : MCLK_DEFAULT_DIV;
     int ret = es8311_set_bits_per_sample(codec, fs->bits_per_sample);
     if (ret != ESP_CODEC_DEV_OK) {
         return ret;
@@ -710,17 +748,42 @@ static int es8311_set_fs(const audio_hw_base_t *h, esp_codec_dev_sample_info_t *
     if (ret != ESP_CODEC_DEV_OK) {
         return ret;
     }
+    uint32_t sysclk_hz;
     if (codec->cfg.sys_cfg.no_mclk == true) {
-        // MCLKIN selects BCLK, use real BCLK/LRCK as mclk_multiple
-        // Cannot get real slot bit, use 64 as default
-        // Real BCLK = sample_rate * total_slot_bit * slot_bit
-        mclk_multiple = 64;
-        if (fs->sample_rate < 16000) {
-            // For less than 16000Hz, need mclk_multiple >= 128
-            mclk_multiple = 128;
+        if (codec->clk_info.sample_rate != 0 && codec->clk_info.sample_rate != fs->sample_rate) {
+            ESP_LOGE(TAG, "Set codec clock failed: Bus sample rate %lu does not match requested rate %lu",
+                     (unsigned long)codec->clk_info.sample_rate, (unsigned long)fs->sample_rate);
+            return ESP_CODEC_DEV_INVALID_ARG;
         }
+        uint16_t fallback_div = ES8311_NO_MCLK_DEFAULT_DIV;
+        if (fs->sample_rate < ES8311_NO_MCLK_LOW_RATE_MAX_HZ) {
+            fallback_div = ES8311_NO_MCLK_LOW_RATE_DIV;
+        }
+        uint32_t fallback_hz = (uint32_t)fs->sample_rate * fallback_div;
+        sysclk_hz = codec->clk_info.sample_rate != 0 ? codec->clk_info.bclk_hz : fallback_hz;
+        /* The row only supplies the divider and OSR fields. es8311_config_sample()
+         * overrides pre_multi in no_mclk mode: BCLK x8, except an 8 kHz frame wider
+         * than 32 bits, which uses BCLK x4 because that BCLK is already 512 kHz.
+         * With no cached BCLK, 8 kHz is treated as a 64-bit frame. A frame that does
+         * not match this choice leaves DIG_MCLK off LRCK x 256, so the ADC repeats
+         * or drops samples. 32fs (2 slots x 16 bits) at 8 kHz and 16 kHz needs a
+         * 1.8 V supply. At 3.3 V the x8 clock can lose lock. 8 kHz 32fs BCLK is
+         * 256 kHz, below the chip minimum of 512 kHz. */
+        if (get_coeff(sysclk_hz, fs->sample_rate) < 0) {
+            if (get_coeff(fallback_hz, fs->sample_rate) < 0) {
+                ESP_LOGE(TAG, "Set codec clock failed: No coefficient for %d Hz with bus clock %luHz or fallback %luHz",
+                         fs->sample_rate, (unsigned long)sysclk_hz, (unsigned long)fallback_hz);
+                return ESP_CODEC_DEV_NOT_SUPPORT;
+            }
+            ESP_LOGW(TAG, "Set codec clock: Bus clock %luHz at %d Hz has no coefficient, using %luHz",
+                     (unsigned long)sysclk_hz, fs->sample_rate, (unsigned long)fallback_hz);
+            sysclk_hz = fallback_hz;
+        }
+    } else {
+        uint16_t mclk_multiple = fs->mclk_multiple ? fs->mclk_multiple : MCLK_DEFAULT_DIV;
+        sysclk_hz = (uint32_t)fs->sample_rate * mclk_multiple;
     }
-    return es8311_config_sample(codec, fs->sample_rate, mclk_multiple);
+    return es8311_config_sample(codec, fs->sample_rate, sysclk_hz);
 }
 
 static int es8311_adc_enable(const audio_codec_if_t *h, bool enable)
@@ -829,6 +892,40 @@ static int es8311_get_adc_label(const audio_hw_base_t *h, const char **label)
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     *label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es8311_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_es8311_t *codec = (audio_codec_es8311_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->adc_enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t active_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &active_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 2 || active_mask == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel configuration");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->cfg.adc_cfg.label = codec->adc_label;
     return ESP_CODEC_DEV_OK;
 }
 
@@ -944,12 +1041,14 @@ const audio_codec_if_t *es8311_codec_new(es8311_codec_cfg_t *codec_cfg)
     codec->base.hw_base.open = es8311_open;
     codec->base.hw_base.is_open = es8311_is_open;
     codec->base.hw_base.set_fs = es8311_set_fs;
+    codec->base.hw_base.set_sysclk = es8311_set_sysclk;
     codec->base.hw_base.set_reg = es8311_set_reg;
     codec->base.hw_base.get_reg = es8311_get_reg;
     codec->base.hw_base.dump_reg = es8311_dump;
     codec->base.hw_base.close = es8311_close;
     codec->base.hw_base.get_order_list = es8311_get_order_list;
     codec->base.hw_base.get_adc_label = es8311_get_adc_label;
+    codec->base.hw_base.set_adc_label = es8311_set_adc_label;
     codec->base.hw_base.get_caps = es8311_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     es8311_save_adc_label(codec, codec_cfg->adc_cfg.label);

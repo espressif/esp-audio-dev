@@ -11,6 +11,7 @@
 #include "esp_log.h"
 
 #include "es7243e_adc.h"
+#include "audio_codec_adc_label.h"
 #include "es_common.h"
 #include "codec_reg_dump.h"
 
@@ -86,6 +87,12 @@ static const es7243e_clock_coeff_t coeff_div[] = {
     {48000, 256, 12288000, 0x10, 0x01, 0x10, 0x03, 0x04, 0x00, 0xC8},
     {48000, 384, 18432000, 0x10, 0x22, 0x10, 0x05, 0x04, 0x00, 0xC8},
     {48000, 512, 24576000, 0x10, 0x00, 0x10, 0x07, 0x04, 0x00, 0xC8},
+};
+
+static const uint8_t es7243e_cap_bits[] = {16, 24, 32};
+
+static const uint32_t es7243e_cap_rates[] = {
+    8000, 16000, 22050, 24000, 32000, 44100, 48000,
 };
 
 static const esp_codec_dev_device_map_info_t order_info[] = {
@@ -282,11 +289,15 @@ static int es7243e_open(const audio_hw_base_t *h, void *cfg, int cfg_size)
     ret |= es7243e_write_reg(codec, 0x01, 0x3A);
     ret |= es7243e_write_reg(codec, 0x16, 0x3F);
     ret |= es7243e_write_reg(codec, 0x16, 0x00);
-    if (ret != 0 || es7243e_adc_enable(codec, true) != ESP_CODEC_DEV_OK) {
-        ESP_LOGI(TAG, "Fail to write register");
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Fail to write register");
         return ESP_CODEC_DEV_WRITE_FAIL;
     }
-    codec->enabled = true;
+    if (es7243e_adc_enable(codec, false) != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Fail to disable ADC after initialization");
+        return ESP_CODEC_DEV_WRITE_FAIL;
+    }
+    codec->enabled = false;
     codec->is_open = true;
     return ESP_CODEC_DEV_OK;
 }
@@ -466,6 +477,40 @@ static int es7243e_get_adc_label(const audio_hw_base_t *h, const char **label)
     return ESP_CODEC_DEV_OK;
 }
 
+static int es7243e_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    audio_codec_es7243e_t *codec = (audio_codec_es7243e_t *)h;
+    if (codec == NULL || label == NULL || label[0] == '\0') {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid argument");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (codec->enabled) {
+        ESP_LOGE(TAG, "Set ADC label failed: ADC is enabled");
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+
+    size_t label_len = strlen(label);
+    if (label_len >= sizeof(codec->adc_label)) {
+        ESP_LOGE(TAG, "Set ADC label failed: label is too long");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    uint16_t active_mask = 0;
+    uint8_t channel_num = 0;
+    int ret = audio_codec_adc_label_parse(label, &active_mask, &channel_num);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    if (channel_num == 0 || channel_num > 2 || active_mask == 0) {
+        ESP_LOGE(TAG, "Set ADC label failed: invalid channel configuration");
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+
+    memcpy(codec->adc_label, label, label_len + 1);
+    codec->cfg.adc_cfg.label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
 static int es7243e_get_order_list(const audio_hw_base_t *h, const esp_codec_dev_device_map_info_t **order_list, int *list_size)
 {
     audio_codec_es7243e_t *codec = (audio_codec_es7243e_t *)h;
@@ -474,6 +519,37 @@ static int es7243e_get_order_list(const audio_hw_base_t *h, const esp_codec_dev_
     }
     *list_size = sizeof(order_info) / sizeof(order_info[0]);
     *order_list = order_info;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int es7243e_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                            esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE ||
+        (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_IN) == 0) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (caps == NULL || *count == 0) {
+        *count = 1;
+        return ESP_CODEC_DEV_OK;
+    }
+    const esp_codec_dev_capability_t adc_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 2,
+            .bits_per_sample = es7243e_cap_bits,
+            .bits_num = sizeof(es7243e_cap_bits) / sizeof(es7243e_cap_bits[0]),
+            .sample_rates = es7243e_cap_rates,
+            .sample_rate_num = sizeof(es7243e_cap_rates) / sizeof(es7243e_cap_rates[0]),
+        },
+    };
+    caps[0] = adc_caps;
+    *count = 1;
     return ESP_CODEC_DEV_OK;
 }
 
@@ -516,6 +592,8 @@ const audio_codec_if_t *es7243e_codec_new(es7243e_codec_cfg_t *codec_cfg)
     codec->base.hw_base.close = es7243e_close;
     codec->base.hw_base.get_order_list = es7243e_get_order_list;
     codec->base.hw_base.get_adc_label = es7243e_get_adc_label;
+    codec->base.hw_base.set_adc_label = es7243e_set_adc_label;
+    codec->base.hw_base.get_caps = es7243e_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
     es7243e_save_adc_label(codec, codec_cfg->adc_cfg.label);
 

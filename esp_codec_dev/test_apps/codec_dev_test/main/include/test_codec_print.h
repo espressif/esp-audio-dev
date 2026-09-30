@@ -41,6 +41,25 @@ int test_analyze_recorded_pcm_s16(const uint8_t *buf, int len, int chunk_bytes);
 int test_analyze_recorded_pcm_s32(const uint8_t *buf, int len, int chunk_bytes);
 
 /**
+ * @brief  Analyze interleaved captured PCM with health and structure checks
+ *
+ * @note  Caller should drop warmup samples first. Channels below the silence
+ *        threshold skip the structure checks, so quiet noise is not failed.
+ *
+ * @param[in]  buf              Interleaved PCM; caller retains ownership
+ * @param[in]  len              Byte length; must be a multiple of one frame
+ * @param[in]  chunk_bytes      One read size for stuck-chunk detection; 0 skips it
+ * @param[in]  channels         Interleaved channel count, 1..16
+ * @param[in]  bits_per_sample  16 or 32
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           Buffer looks like live, advancing PCM
+ *       - ESP_CODEC_DEV_INVALID_ARG  Argument or a health/structure check failed
+ */
+int test_analyze_recorded_pcm(const uint8_t *buf, int len, int chunk_bytes,
+                              int channels, int bits_per_sample);
+
+/**
  * @brief  Find the maximum and minimum sample values in an interleaved 16-bit PCM buffer.
  *
  * @param  data       Interleaved PCM buffer, 16-bit per sample slot (one int16 per slot).

@@ -145,6 +145,45 @@ int audio_hw_get_adc_label(const audio_hw_base_t *h, const char **label);
 int audio_hw_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
                       esp_codec_dev_capability_t *caps, int *count);
 
+/**
+ * @brief  Cache committed bus clock geometry before set_fs
+ *
+ *         Optional. Passing NULL clears previously cached clock information.
+ *         Must not program codec registers; set_fs consumes the cache.
+ *         clk_info is valid only for this call; the driver must copy if it stores it.
+ *
+ * @note  This operation is non-ISR-safe and must be externally serialized with set_fs.
+ *         When the codec leaves set_sysclk as NULL, the wrapper returns success.
+ *
+ * @param[in]  h         Codec hardware base
+ * @param[in]  clk_info  Clock inputs derived from committed bus, or NULL to clear; caller retains ownership
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           Cached, cleared, or skipped because the codec has no callback
+ *       - ESP_CODEC_DEV_INVALID_ARG  h is NULL or clk_info fields are invalid
+ *       - ESP_CODEC_DEV_WRONG_STATE  Codec is not open
+ */
+int audio_hw_set_sysclk(const audio_hw_base_t *h, const esp_codec_dev_sys_clk_info_t *clk_info);
+
+/**
+ * @brief  Set ADC channel labels while the ADC path is disabled
+ *
+ *         Optional. The codec must copy @p label before returning.
+ *
+ * @note  This operation is non-ISR-safe. When the codec leaves set_adc_label as
+ *         NULL, the wrapper returns ESP_CODEC_DEV_NOT_SUPPORT.
+ *
+ * @param[in]  h      Codec hardware base
+ * @param[in]  label  Non-empty ADC label list; caller retains ownership
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           Label stored
+ *       - ESP_CODEC_DEV_INVALID_ARG  h or label is NULL, or label is invalid
+ *       - ESP_CODEC_DEV_NOT_SUPPORT  The codec does not support this operation
+ *       - ESP_CODEC_DEV_WRONG_STATE  ADC path is enabled
+ */
+int audio_hw_set_adc_label(const audio_hw_base_t *h, const char *label);
+
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

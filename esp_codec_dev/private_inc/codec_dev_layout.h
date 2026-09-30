@@ -150,19 +150,45 @@ void codec_dev_layout_get_maps(codec_dev_t *dev, esp_codec_dev_channel_map_t *re
 int codec_dev_layout_get_app_map(codec_dev_t *dev, esp_codec_dev_channel_map_t *map);
 
 /**
- * @brief  Reconfigure hardware sample format so it matches a requested memory map
+ * @brief  Resolve the hardware sample format that expresses a requested memory map
  *
- * @param[in]  dev  Codec device instance
- * @param[in]  map  Requested memory map
+ *         Pure query: no hardware is touched, so a failure only means the map cannot be expressed
+ *         by a bus format and the caller may still fall back to software layout conversion.
+ *
+ * @param[in]   dev    Codec device instance
+ * @param[in]   map    Requested memory map
+ * @param[out]  hw_fs  Current format with channel count and mask replaced; undefined on error
+ *
+ * @return
+ *       - ESP_CODEC_DEV_OK           hw_fs is populated
+ *       - ESP_CODEC_DEV_INVALID_ARG  Invalid argument
+ *       - ESP_CODEC_DEV_NOT_SUPPORT  Device is not open, mode query failed, or no order-table row
+ *                                    can express the map
+ */
+int codec_dev_layout_resolve_hw_fs(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map,
+                                   esp_codec_dev_sample_info_t *hw_fs);
+
+/**
+ * @brief  Apply a resolved hardware sample format so the bus matches a requested memory map
+ *
+ * @note  Call only with an `hw_fs` from codec_dev_layout_resolve_hw_fs(). This touches the audio
+ *        path, so any error must be reported to the application instead of being treated as a
+ *        reason to fall back to software conversion. Restore on failure is best effort; when it
+ *        cannot bring the bus back the error is logged and the device must be closed and reopened.
+ *
+ * @param[in]  dev    Codec device instance
+ * @param[in]  map    Requested memory map
+ * @param[in]  hw_fs  Format resolved by codec_dev_layout_resolve_hw_fs()
  *
  * @return
  *       - ESP_CODEC_DEV_OK           Hardware matches the map
- *       - ESP_CODEC_DEV_INVALID_ARG  Map cannot be resolved to a format
- *       - ESP_CODEC_DEV_NOT_SUPPORT  Device is not open or map cannot be applied
+ *       - ESP_CODEC_DEV_INVALID_ARG  Invalid argument
+ *       - ESP_CODEC_DEV_NOT_SUPPORT  Codec rejected the format
  *       - ESP_CODEC_DEV_WRONG_STATE  Data interface is not open
  *       - ESP_CODEC_DEV_DRV_ERR      Codec or data interface enable or format failed
  */
-int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map);
+int codec_dev_layout_reconfigure_hw(codec_dev_t *dev, const esp_codec_dev_channel_map_t *map,
+                                    const esp_codec_dev_sample_info_t *hw_fs);
 
 /**
  * @brief  Read PCM, applying software layout conversion when needed

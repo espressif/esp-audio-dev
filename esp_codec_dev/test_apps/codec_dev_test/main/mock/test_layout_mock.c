@@ -16,11 +16,16 @@
 #include "audio_codec_if.h"
 #include "audio_hw_base.h"
 
+#define TEST_LAYOUT_SYSCLK_HIST  (8)
+
 typedef struct {
     audio_codec_if_t                       base;
     const esp_codec_dev_device_map_info_t *order_list;
     int                                    order_list_size;
-    const char                            *adc_label;
+    char                                   adc_label[AUDIO_HW_ADC_LABEL_MAX_LEN];
+    int                                    set_adc_label_call_count;
+    int                                    set_adc_label_ret;
+    bool                                   set_adc_label_copy;
     esp_codec_dev_sample_info_t            last_fs;
     esp_codec_dev_type_t                   last_fs_type;
     esp_codec_dev_sample_info_t            fs_history[4];
@@ -28,6 +33,19 @@ typedef struct {
     int                                    set_fs_seq[4];
     int                                    set_fs_call_count;
     int                                    set_fs_ret;
+    int                                    set_fs_fail_on_call;
+    esp_codec_dev_sys_clk_info_t           last_clk_info;
+    esp_codec_dev_sys_clk_info_t           clk_info_history[TEST_LAYOUT_SYSCLK_HIST];
+    int                                    set_sysclk_seq[TEST_LAYOUT_SYSCLK_HIST];
+    bool                                   clk_info_null_history[TEST_LAYOUT_SYSCLK_HIST];
+    bool                                   last_clk_info_is_null;
+    int                                    set_sysclk_call_count;
+    int                                    set_sysclk_apply_count;
+    int                                    set_sysclk_ret;
+    audio_hw_adc_if_t                      adc_if;
+    int                                    adc_enable_true_count;
+    int                                    adc_enable_false_count;
+    bool                                   adc_enabled;
     esp_codec_dev_device_map_info_t        map_query_order_list[4];
     int                                    get_order_list_call_count;
     bool                                   opened;
@@ -45,8 +63,10 @@ typedef struct {
     esp_codec_dev_bus_info_t     out_bus;
     int                          set_fmt_call_count;
     int                          set_fmt_ret;
+    int                          set_fmt_fail_on_call;
     int                          get_bus_info_call_count;
     int                          get_bus_info_ret;
+    esp_codec_dev_type_t         last_get_bus_info_type;
     int                          set_map_query_call_count;
     int                          clear_map_query_call_count;
     int                          set_in_map_query_call_count;
@@ -157,7 +177,53 @@ static int test_layout_codec_set_fs(const audio_hw_base_t *h, esp_codec_dev_samp
     }
     codec->last_fs = *fs;
     codec->last_fs_type = type;
-    return codec->set_fs_ret;
+    if (codec->set_fs_ret != ESP_CODEC_DEV_OK &&
+        (codec->set_fs_fail_on_call == 0 || codec->set_fs_call_count == codec->set_fs_fail_on_call)) {
+        return codec->set_fs_ret;
+    }
+    return ESP_CODEC_DEV_OK;
+}
+
+static int test_layout_codec_adc_enable(const audio_codec_if_t *h, bool enable)
+{
+    test_layout_codec_if_t *codec = (test_layout_codec_if_t *)h;
+    if (codec == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    codec->adc_enabled = enable;
+    if (enable) {
+        codec->adc_enable_true_count++;
+    } else {
+        codec->adc_enable_false_count++;
+    }
+    return ESP_CODEC_DEV_OK;
+}
+
+static int test_layout_codec_set_sysclk(const audio_hw_base_t *h, const esp_codec_dev_sys_clk_info_t *clk_info)
+{
+    test_layout_codec_if_t *codec = (test_layout_codec_if_t *)h;
+    if (codec == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    codec->set_sysclk_call_count++;
+    int idx = codec->set_sysclk_call_count - 1;
+    if (idx < TEST_LAYOUT_SYSCLK_HIST) {
+        codec->set_sysclk_seq[idx] = test_layout_next_seq();
+        codec->clk_info_null_history[idx] = (clk_info == NULL);
+        if (clk_info) {
+            codec->clk_info_history[idx] = *clk_info;
+        } else {
+            memset(&codec->clk_info_history[idx], 0, sizeof(codec->clk_info_history[idx]));
+        }
+    }
+    codec->last_clk_info_is_null = (clk_info == NULL);
+    if (clk_info) {
+        codec->last_clk_info = *clk_info;
+        codec->set_sysclk_apply_count++;
+        return codec->set_sysclk_ret;
+    }
+    memset(&codec->last_clk_info, 0, sizeof(codec->last_clk_info));
+    return ESP_CODEC_DEV_OK;
 }
 
 static int test_layout_codec_get_order_list(const audio_hw_base_t *h, const esp_codec_dev_device_map_info_t **order_list,
@@ -176,10 +242,30 @@ static int test_layout_codec_get_order_list(const audio_hw_base_t *h, const esp_
 static int test_layout_codec_get_adc_label(const audio_hw_base_t *h, const char **label)
 {
     test_layout_codec_if_t *codec = (test_layout_codec_if_t *)h;
-    if (codec == NULL || label == NULL || codec->adc_label == NULL) {
+    if (codec == NULL || label == NULL || codec->adc_label[0] == '\0') {
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     *label = codec->adc_label;
+    return ESP_CODEC_DEV_OK;
+}
+
+static int test_layout_codec_set_adc_label(const audio_hw_base_t *h, const char *label)
+{
+    test_layout_codec_if_t *codec = (test_layout_codec_if_t *)h;
+    if (codec == NULL || label == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    codec->set_adc_label_call_count++;
+    if (codec->set_adc_label_ret != ESP_CODEC_DEV_OK) {
+        return codec->set_adc_label_ret;
+    }
+    if (codec->set_adc_label_copy) {
+        size_t label_len = strlen(label);
+        if (label_len >= sizeof(codec->adc_label)) {
+            return ESP_CODEC_DEV_INVALID_ARG;
+        }
+        memcpy(codec->adc_label, label, label_len + 1);
+    }
     return ESP_CODEC_DEV_OK;
 }
 
@@ -244,8 +330,19 @@ static int test_layout_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_de
         esp_codec_dev_map_query_t *query = test_layout_select_map_query(data_if, dev_type);
         data_if->map_query_registered_during_set_fmt = query && query->resolve_cb != NULL;
     }
+    if (data_if->set_fmt_ret != ESP_CODEC_DEV_OK &&
+        (data_if->set_fmt_fail_on_call == 0 ||
+         data_if->set_fmt_call_count == data_if->set_fmt_fail_on_call)) {
+        if (dev_type & ESP_CODEC_DEV_TYPE_IN) {
+            memset(&data_if->in_bus, 0, sizeof(data_if->in_bus));
+        }
+        if (dev_type & ESP_CODEC_DEV_TYPE_OUT) {
+            memset(&data_if->out_bus, 0, sizeof(data_if->out_bus));
+        }
+        return data_if->set_fmt_ret;
+    }
     data_if->fs = *fs;
-    return data_if->set_fmt_ret == 0 ? ESP_CODEC_DEV_OK : data_if->set_fmt_ret;
+    return ESP_CODEC_DEV_OK;
 }
 
 static int test_layout_data_get_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_t dev_type,
@@ -314,8 +411,12 @@ static int test_layout_data_get_bus_info(const audio_codec_data_if_t *h, esp_cod
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     data_if->get_bus_info_call_count++;
+    data_if->last_get_bus_info_type = dev_type;
     if (data_if->get_bus_info_ret != ESP_CODEC_DEV_OK) {
         return data_if->get_bus_info_ret;
+    }
+    if (stored_bus->total_slot == 0) {
+        return ESP_CODEC_DEV_WRONG_STATE;
     }
     *bus_info = *stored_bus;
     return ESP_CODEC_DEV_OK;
@@ -358,13 +459,20 @@ static void test_layout_init_codec(test_layout_codec_if_t *codec, const esp_code
     memset(codec, 0, sizeof(*codec));
     codec->order_list = order_list;
     codec->order_list_size = order_list_size;
-    codec->adc_label = adc_label;
+    if (adc_label != NULL) {
+        strncpy(codec->adc_label, adc_label, sizeof(codec->adc_label) - 1);
+        codec->adc_label[sizeof(codec->adc_label) - 1] = '\0';
+    }
+    codec->set_adc_label_copy = true;
     codec->opened = true;
     codec->base.hw_base.open = test_layout_codec_open;
     codec->base.hw_base.is_open = test_layout_codec_is_open;
     codec->base.hw_base.set_fs = test_layout_codec_set_fs;
+    codec->base.hw_base.set_sysclk = test_layout_codec_set_sysclk;
     codec->base.hw_base.get_order_list = test_layout_codec_get_order_list;
     codec->base.hw_base.get_adc_label = test_layout_codec_get_adc_label;
+    codec->base.hw_base.set_adc_label = test_layout_codec_set_adc_label;
+    codec->adc_if.ops.enable = test_layout_codec_adc_enable;
 }
 
 static void test_layout_enable_codec_order_rows(test_layout_codec_if_t *codec)
@@ -376,7 +484,7 @@ static void test_layout_enable_codec_order_rows(test_layout_codec_if_t *codec)
     codec->map_query_order_list[2] = (esp_codec_dev_device_map_info_t) {
         ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}};
     codec->map_query_order_list[3] = (esp_codec_dev_device_map_info_t) {
-        ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP(1, 3, 5, 7, 2, 4, 6, 8)}};
+        ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 8, {.value = ESP_CODEC_DEV_CHANNEL_MAP_8CH(1, 3, 5, 7, 2, 4, 6, 8)}};
     codec->order_list = codec->map_query_order_list;
     codec->order_list_size = sizeof(codec->map_query_order_list) / sizeof(codec->map_query_order_list[0]);
 }
@@ -436,6 +544,7 @@ static void test_layout_label_rejects_output_only_device(void)
     char label[16] = {0};
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_get_data_layout_label(dev, label, sizeof(label)));
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_set_data_layout_label(dev, "FR,FL"));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_set_adc_label(dev, "FL,FR"));
 
     esp_codec_dev_delete(dev);
 }
@@ -984,15 +1093,399 @@ static void test_layout_codec_set_fs_failure_happens_after_bus_is_configured(voi
 
     TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_open(dev, &fs));
     TEST_ASSERT_EQUAL_INT(1, codec.set_fs_call_count);
+    TEST_ASSERT_EQUAL_INT(2, codec.set_sysclk_call_count);
+    TEST_ASSERT_EQUAL_INT(1, codec.set_sysclk_apply_count);
+    TEST_ASSERT_TRUE(codec.clk_info_null_history[0]);
+    TEST_ASSERT_FALSE(codec.clk_info_null_history[1]);
     TEST_ASSERT_EQUAL_INT(1, data_if.set_fmt_call_count);
     TEST_ASSERT_TRUE(data_if.set_fmt_seq > 0);
     TEST_ASSERT_TRUE(data_if.enable_true_seq > 0);
     TEST_ASSERT_TRUE(data_if.set_fmt_seq < data_if.enable_true_seq);
-    TEST_ASSERT_TRUE(codec.set_fs_seq[0] > data_if.enable_true_seq);
+    TEST_ASSERT_TRUE(codec.set_sysclk_seq[0] > data_if.enable_true_seq);
+    TEST_ASSERT_TRUE(codec.set_sysclk_seq[1] > codec.set_sysclk_seq[0]);
+    TEST_ASSERT_TRUE(codec.set_fs_seq[0] > codec.set_sysclk_seq[1]);
     TEST_ASSERT_EQUAL_INT(1, data_if.clear_map_query_call_count);
     TEST_ASSERT_TRUE(data_if.enable_false_seq > 0);
     TEST_ASSERT_TRUE(data_if.enable_false_seq < data_if.map_query_clear_seq);
     TEST_ASSERT_NULL(data_if.in_map_query.resolve_cb);
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_converts_widened_bus_into_sysclk(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 6, {.value = ESP_CODEC_DEV_CHANNEL_MAP_6CH(1, 3, 5, 2, 4, 6)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2,CH3,CH4");
+    test_layout_enable_codec_order_rows(&codec);
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS;
+    data_if.in_bus = test_layout_make_bus(ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 16000, 256, 6, 16, 16, 0x03);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_UINT8(2, codec.last_fs.channel);
+    TEST_ASSERT_EQUAL_UINT16(0x03, codec.last_fs.channel_mask);
+    TEST_ASSERT_FALSE(codec.last_clk_info_is_null);
+    TEST_ASSERT_EQUAL_UINT32(16000, codec.last_clk_info.sample_rate);
+    TEST_ASSERT_EQUAL_UINT32(4096000, codec.last_clk_info.mclk_hz);
+    TEST_ASSERT_EQUAL_UINT32(1536000, codec.last_clk_info.bclk_hz);
+    TEST_ASSERT_EQUAL_UINT8(6, codec.last_clk_info.total_slot);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_skips_sysclk_without_get_bus_info(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+    data_if.base.get_bus_info = NULL;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_sysclk_apply_count);
+    TEST_ASSERT_EQUAL_INT(1, codec.set_sysclk_call_count);
+    TEST_ASSERT_TRUE(codec.last_clk_info_is_null);
+    TEST_ASSERT_EQUAL_INT(1, codec.set_fs_call_count);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_skips_sysclk_on_wrong_state(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+    data_if.get_bus_info_ret = ESP_CODEC_DEV_WRONG_STATE;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_sysclk_apply_count);
+    TEST_ASSERT_TRUE(codec.last_clk_info_is_null);
+    TEST_ASSERT_EQUAL_INT(1, codec.set_fs_call_count);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_skips_sysclk_when_callback_absent(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+    codec.base.hw_base.set_sysclk = NULL;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_sysclk_call_count);
+    TEST_ASSERT_EQUAL_INT(1, codec.set_fs_call_count);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_fails_when_get_bus_info_errors(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+    data_if.get_bus_info_ret = ESP_CODEC_DEV_DRV_ERR;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_DRV_ERR, esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_sysclk_apply_count);
+    TEST_ASSERT_EQUAL_INT(0, codec.set_fs_call_count);
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_fails_when_set_sysclk_errors(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+    codec.set_sysclk_ret = ESP_CODEC_DEV_INVALID_ARG;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_fs_call_count);
+    TEST_ASSERT_TRUE(data_if.enable_false_seq > 0);
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_open_clears_sysclk_cache_when_bus_is_unavailable(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = 0x03,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2");
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(1, codec.set_sysclk_apply_count);
+    TEST_ASSERT_FALSE(codec.last_clk_info_is_null);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+
+    data_if.get_bus_info_ret = ESP_CODEC_DEV_WRONG_STATE;
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(1, codec.set_sysclk_apply_count);
+    TEST_ASSERT_TRUE(codec.last_clk_info_is_null);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_rollback_keeps_codec_disabled_when_bus_restore_fails(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 4,
+        .bits_per_sample = 16,
+        .channel_mask = 0x0F,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]),
+                           "CH1,CH2,CH3,CH4");
+    codec.base.adc_if = &codec.adc_if;
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_bus = test_layout_make_bus(ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 16000, 256, 4, 32, 16, 0x0F);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL_INT(1, codec.adc_enable_true_count);
+
+    codec.set_fs_ret = ESP_CODEC_DEV_NOT_SUPPORT;
+    codec.set_fs_fail_on_call = 2;
+    data_if.set_fmt_ret = ESP_CODEC_DEV_DRV_ERR;
+    data_if.set_fmt_fail_on_call = 3;
+    esp_codec_dev_channel_map_t map = {
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2),
+    };
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_set_data_layout(dev, &map));
+
+    TEST_ASSERT_EQUAL_INT(3, data_if.set_fmt_call_count);
+    TEST_ASSERT_EQUAL_INT(2, codec.set_fs_call_count);
+    TEST_ASSERT_TRUE(codec.last_clk_info_is_null);
+    TEST_ASSERT_EQUAL_INT(1, codec.adc_enable_true_count);
+    TEST_ASSERT_FALSE(codec.adc_enabled);
+
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_rollback_restores_codec_from_committed_bus(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 4,
+        .bits_per_sample = 16,
+        .channel_mask = 0x0F,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]),
+                           "CH1,CH2,CH3,CH4");
+    codec.base.adc_if = &codec.adc_if;
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_bus = test_layout_make_bus(ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 16000, 256, 4, 32, 16, 0x0F);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+
+    codec.set_fs_ret = ESP_CODEC_DEV_NOT_SUPPORT;
+    codec.set_fs_fail_on_call = 2;
+    esp_codec_dev_channel_map_t map = {
+        .value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2),
+    };
+    /* Hardware could express the layout but failed to apply it, so no software fallback happens. */
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_set_data_layout(dev, &map));
+
+    TEST_ASSERT_EQUAL_INT(3, codec.set_fs_call_count);
+    TEST_ASSERT_FALSE(codec.last_clk_info_is_null);
+    TEST_ASSERT_EQUAL_UINT32(16000U * 4U * 32U, codec.last_clk_info.bclk_hz);
+    TEST_ASSERT_EQUAL_INT(2, codec.adc_enable_true_count);
+    TEST_ASSERT_TRUE(codec.adc_enabled);
+
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_layout_in_out_open_queries_output_bus_for_sysclk(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 4, {.value = ESP_CODEC_DEV_CHANNEL_MAP_4CH(1, 3, 2, 4)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 4,
+        .bits_per_sample = 16,
+        .channel_mask = 0x01,
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "CH1,CH2,CH3,CH4");
+    test_layout_enable_codec_order_rows(&codec);
+    test_layout_init_data(&data_if, &fs);
+    data_if.in_mode = ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS;
+    data_if.out_mode = ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS;
+    data_if.in_bus = test_layout_make_bus(ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 16000, 256, 4, 16, 16, 0x01);
+    data_if.out_bus = test_layout_make_bus(ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 16000, 256, 4, 32, 16, 0x01);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_TYPE_OUT, data_if.last_get_bus_info_type);
+    TEST_ASSERT_EQUAL_UINT8(4, codec.last_clk_info.total_slot);
+    TEST_ASSERT_EQUAL_UINT32(2048000, codec.last_clk_info.bclk_hz);
+    TEST_ESP_OK(esp_codec_dev_close(dev));
     esp_codec_dev_delete(dev);
 }
 
@@ -1106,6 +1599,175 @@ static void test_layout_legacy_tdm_open_accepts_16_slot_without_map_query(void)
     esp_codec_dev_delete(dev);
 }
 
+static void test_set_adc_label_updates_copied_label_and_layout_translation(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(1),
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "FL,FR");
+    test_layout_init_data(&data_if, &fs);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+
+    TEST_ESP_OK(esp_codec_dev_set_adc_label(dev, "FR,FL"));
+    TEST_ASSERT_EQUAL_INT(1, codec.set_adc_label_call_count);
+    TEST_ASSERT_EQUAL_STRING("FR,FL", codec.adc_label);
+
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ESP_OK(esp_codec_dev_set_data_layout_label(dev, "FL,FR"));
+
+    char label[16] = {0};
+    TEST_ESP_OK(esp_codec_dev_get_data_layout_label(dev, label, sizeof(label)));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", label);
+
+    esp_codec_dev_channel_map_t map = {0};
+    TEST_ESP_OK(esp_codec_dev_get_data_layout(dev, &map));
+    TEST_ASSERT_EQUAL_UINT32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), map.value);
+
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_set_adc_label_rejects_open_input_and_invalid_args(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(1),
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "FL,FR");
+    test_layout_init_data(&data_if, &fs);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_set_adc_label(NULL, "FL,FR"));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_set_adc_label(dev, NULL));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_set_adc_label(dev, ""));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_adc_label_call_count);
+
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_WRONG_STATE, esp_codec_dev_set_adc_label(dev, "FR,FL"));
+    TEST_ASSERT_EQUAL_INT(0, codec.set_adc_label_call_count);
+    TEST_ASSERT_EQUAL_STRING("FL,FR", codec.adc_label);
+
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
+static void test_set_adc_label_missing_callback_and_driver_failure(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_STD_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(1),
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "FL,FR");
+    test_layout_init_data(&data_if, &fs);
+    codec.base.hw_base.set_adc_label = NULL;
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_NOT_SUPPORT, esp_codec_dev_set_adc_label(dev, "FR,FL"));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", codec.adc_label);
+
+    codec.base.hw_base.set_adc_label = test_layout_codec_set_adc_label;
+    codec.set_adc_label_ret = ESP_CODEC_DEV_INVALID_ARG;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_set_adc_label(dev, "FR,FL"));
+    TEST_ASSERT_EQUAL_INT(1, codec.set_adc_label_call_count);
+    TEST_ASSERT_EQUAL_STRING("FL,FR", codec.adc_label);
+
+    esp_codec_dev_delete(dev);
+}
+
+static void test_set_adc_label_clears_layout_maps_only_on_success(void)
+{
+    esp_codec_dev_device_map_info_t codec_orders[] = {
+        {ESP_CODEC_DEV_I2S_MODE_TDM_PHILIPS, 2, {.value = ESP_CODEC_DEV_CHANNEL_MAP_2CH(1, 2)}},
+    };
+    esp_codec_dev_sample_info_t fs = {
+        .sample_rate = 16000,
+        .channel = 2,
+        .bits_per_sample = 16,
+        .channel_mask = BIT(0) | BIT(1),
+        .mclk_multiple = 256,
+    };
+    test_layout_codec_if_t codec = {0};
+    test_layout_data_if_t data_if = {0};
+    test_layout_init_codec(&codec, codec_orders, sizeof(codec_orders) / sizeof(codec_orders[0]), "FL,FR");
+    test_layout_init_data(&data_if, &fs);
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .codec_if = &codec.base,
+        .data_if = &data_if.base,
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    TEST_ASSERT_NOT_NULL(dev);
+
+    codec.set_adc_label_ret = ESP_CODEC_DEV_INVALID_ARG;
+    TEST_ASSERT_EQUAL(ESP_CODEC_DEV_INVALID_ARG, esp_codec_dev_set_adc_label(dev, "FL,RE"));
+    TEST_ASSERT_EQUAL_STRING("FL,FR", codec.adc_label);
+
+    codec.set_adc_label_ret = ESP_CODEC_DEV_OK;
+    TEST_ESP_OK(esp_codec_dev_set_adc_label(dev, "FL,RE"));
+    TEST_ASSERT_EQUAL_STRING("FL,RE", codec.adc_label);
+
+    TEST_ESP_OK(esp_codec_dev_open(dev, &fs));
+    TEST_ESP_OK(esp_codec_dev_set_data_layout_label(dev, "RE,FL"));
+
+    esp_codec_dev_channel_map_t map = {0};
+    TEST_ESP_OK(esp_codec_dev_get_data_layout(dev, &map));
+    TEST_ASSERT_EQUAL_UINT32(ESP_CODEC_DEV_CHANNEL_MAP_2CH(2, 1), map.value);
+
+    char label[16] = {0};
+    TEST_ESP_OK(esp_codec_dev_get_data_layout_label(dev, label, sizeof(label)));
+    TEST_ASSERT_EQUAL_STRING("RE,FL", label);
+
+    TEST_ESP_OK(esp_codec_dev_close(dev));
+    esp_codec_dev_delete(dev);
+}
+
 TEST_CASE("layout label API rejects output only device", "[mock][layout]")
 {
     test_layout_label_rejects_output_only_device();
@@ -1176,6 +1838,56 @@ TEST_CASE("layout configures and enables bus before codec set-fs", "[mock][layou
     test_layout_codec_set_fs_failure_happens_after_bus_is_configured();
 }
 
+TEST_CASE("layout open converts widened bus into sysclk", "[mock][layout]")
+{
+    test_layout_open_converts_widened_bus_into_sysclk();
+}
+
+TEST_CASE("layout open skips sysclk without get_bus_info", "[mock][layout]")
+{
+    test_layout_open_skips_sysclk_without_get_bus_info();
+}
+
+TEST_CASE("layout open skips sysclk on wrong state", "[mock][layout]")
+{
+    test_layout_open_skips_sysclk_on_wrong_state();
+}
+
+TEST_CASE("layout open skips sysclk when callback absent", "[mock][layout]")
+{
+    test_layout_open_skips_sysclk_when_callback_absent();
+}
+
+TEST_CASE("layout open fails when get_bus_info errors", "[mock][layout]")
+{
+    test_layout_open_fails_when_get_bus_info_errors();
+}
+
+TEST_CASE("layout open fails when set_sysclk errors", "[mock][layout]")
+{
+    test_layout_open_fails_when_set_sysclk_errors();
+}
+
+TEST_CASE("layout open clears sysclk cache when bus is unavailable", "[mock][layout]")
+{
+    test_layout_open_clears_sysclk_cache_when_bus_is_unavailable();
+}
+
+TEST_CASE("layout rollback keeps codec disabled when bus restore fails", "[mock][layout]")
+{
+    test_layout_rollback_keeps_codec_disabled_when_bus_restore_fails();
+}
+
+TEST_CASE("layout rollback restores codec from committed bus", "[mock][layout]")
+{
+    test_layout_rollback_restores_codec_from_committed_bus();
+}
+
+TEST_CASE("layout in-out open queries output bus for sysclk", "[mock][layout]")
+{
+    test_layout_in_out_open_queries_output_bus_for_sysclk();
+}
+
 TEST_CASE("layout map-query-absent and std paths keep legacy behavior", "[mock][layout]")
 {
     test_layout_map_query_absent_and_std_path_keep_legacy_behavior();
@@ -1184,4 +1896,24 @@ TEST_CASE("layout map-query-absent and std paths keep legacy behavior", "[mock][
 TEST_CASE("layout legacy tdm open accepts 16 slots without map query", "[mock][layout]")
 {
     test_layout_legacy_tdm_open_accepts_16_slot_without_map_query();
+}
+
+TEST_CASE("set_adc_label updates copied label and layout translation", "[mock][layout][adc_label]")
+{
+    test_set_adc_label_updates_copied_label_and_layout_translation();
+}
+
+TEST_CASE("set_adc_label rejects open input and invalid args", "[mock][layout][adc_label]")
+{
+    test_set_adc_label_rejects_open_input_and_invalid_args();
+}
+
+TEST_CASE("set_adc_label missing callback and driver failure", "[mock][layout][adc_label]")
+{
+    test_set_adc_label_missing_callback_and_driver_failure();
+}
+
+TEST_CASE("set_adc_label clears layout maps only on success", "[mock][layout][adc_label]")
+{
+    test_set_adc_label_clears_layout_maps_only_on_success();
 }

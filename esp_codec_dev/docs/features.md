@@ -100,7 +100,7 @@ layout 由两层 map 信息合成：
 | `ESP_CODEC_DEV_CAPS_MODE_FIXED` | 固定的 `channel + bits_per_sample + sample_rate` 元组。 |
 | `ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE` | 指定位宽、采样率列表；`max_channels` 为该方向 I2S 最大 slot 数。 |
 
-当前仅 **ES8311**（codec 侧）与 **UAC**（USB alt setting）实现 `get_caps`；其他 codec 调用返回 `ESP_CODEC_DEV_NOT_SUPPORT`。详见第 13 节与第 10 节矩阵。
+当前除 `dummy` 外，各 codec 驱动均实现 `get_caps`。`dummy` 只控制功放，查询返回 `ESP_CODEC_DEV_NOT_SUPPORT`。UAC 按 USB alt setting 返回能力。详见第 13 节与第 10 节矩阵。
 
 ## 6. 寄存器访问与调试
 
@@ -249,20 +249,20 @@ esp_codec_dev_uac_uninstall();
 | Codec | ADC ops | DAC ops | PA 控制 | HW proc | `get_caps` | `get_order_list` | ADC label | 多实例复用 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ES8311` | Y | Y | Y | ALC/DRC/EQ/Mute | Y | Y | Y | Y |
-| `ES7210` | Y | N | N | ALC/Mute | N | Y | Y | N |
-| `ES7243` | Y | N | N | N | N | N | Y | N |
-| `ES7243E` | Y | N | N | N | N | Y | Y | N |
-| `ES8156` | N | Y | Y | N | N | N | N | N |
-| `ES8374` | 旧式 | 旧式 | 旧式 | N | N | N | N | N |
-| `ES8388` | Y | Y | Y | ALC/Line | N | Y | N | N |
-| `ES8389` | Y | Y | Y | N | N | Y | Y | Y |
-| `AW88298` | N | Y | 芯片内/复位 | N | N | N | N | N |
-| `TAS5805M` | N | Y | Y | N | N | N | N | N |
-| `ZL38063` | N | Y | Y | N | N | N | N | N |
-| `CJC8910` | 仅增益 | Y | 部分 | N | N | N | N | N |
+| `ES7210` | Y | N | N | ALC/Mute | Y | Y | Y | N |
+| `ES7243` | Y | N | N | N | Y | N | Y | N |
+| `ES7243E` | Y | N | N | N | Y | Y | Y | N |
+| `ES8156` | N | Y | Y | N | Y | N | N | N |
+| `ES8374` | 旧式 | 旧式 | 旧式 | N | Y | N | N | N |
+| `ES8388` | Y | Y | Y | ALC/Line | Y | Y | N | N |
+| `ES8389` | Y | Y | Y | N | Y | Y | Y | Y |
+| `AW88298` | N | Y | 芯片内/复位 | N | Y | N | N | N |
+| `TAS5805M` | N | Y | Y | N | Y | N | N | N |
+| `ZL38063` | N | Y | Y | N | Y | N | N | N |
+| `CJC8910` | 仅增益 | Y | 部分 | N | Y | N | N | N |
 | `dummy` | N | Y | Y | N | N | N | N | N |
 | `UAC` | Y | Y | N | N | Y | 不支持 | N | N |
-| `template_codec` | Y | Y | Y | N | N | Y | N | N |
+| `template_codec` | Y | Y | Y | N | Y | Y | N | N |
 
 ### 数据通路实测状态
 
@@ -324,7 +324,7 @@ target_link_libraries(${COMPONENT_LIB} INTERFACE "-u audio_codec_desc_my_codec")
 1. 各 codec 的 `codec_cfg` 均已迁到公共子配置模型；差异主要体现在按硬件能力选用的子配置子集，以及部分芯片的测试覆盖程度。
 2. `ES8311` 的 `dac_cfg` 已结构化，部分 DAC reference 模式仅区分启用与禁用。
 3. `ES7210` 的 `adc_cfg.digital_mic` 字段当前驱动未消费。
-4. `get_caps` 主要由 ES8311 与 UAC 实现；其他 codec 返回 `ESP_CODEC_DEV_NOT_SUPPORT`。
+4. `dummy` 不实现 `get_caps`，查询返回 `ESP_CODEC_DEV_NOT_SUPPORT`。其余 codec 驱动已实现。
 5. data layout 依赖 codec 实现 `get_order_list`，以及 data_if 实现 `get_mode`（用于方向 mode）；slot mask 与 map 的换算由组件内部完成。label API 另外依赖 codec 实现 `get_adc_label`。
 6. 硬件音频处理实际覆盖集中在 ES8311、ES7210、ES8388。
 7. 内置静态表覆盖了全部 Kconfig 可选 codec；UAC 走独立管理器，自定义驱动可通过 `AUDIO_CODEC_REGISTER()` 链接期挂接，或继续调用专用 `*_codec_new()`。

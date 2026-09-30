@@ -14,6 +14,12 @@
 
 static const char *TAG = "AW88298";
 
+static const uint8_t aw88298_cap_bits[] = {16, 24, 32};
+
+static const uint32_t aw88298_cap_rates[] = {
+    8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 96000, 192000,
+};
+
 /**
  * @brief  AW88298 codec driver instance
  */
@@ -356,6 +362,37 @@ static void aw88298_dump(const audio_hw_base_t *h)
     codec_reg_dump_end(&dump);
 }
 
+static int aw88298_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type,
+                            esp_codec_dev_capability_t *caps, int *count)
+{
+    if (h == NULL || count == NULL || *count < 0 ||
+        dev_type == ESP_CODEC_DEV_TYPE_NONE ||
+        (dev_type & ~(ESP_CODEC_DEV_TYPE_IN_OUT)) != 0) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_OUT) == 0) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    if (caps == NULL || *count == 0) {
+        *count = 1;
+        return ESP_CODEC_DEV_OK;
+    }
+    const esp_codec_dev_capability_t dac_caps = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
+        .flexible = {
+            .max_channels = 1,
+            .bits_per_sample = aw88298_cap_bits,
+            .bits_num = sizeof(aw88298_cap_bits) / sizeof(aw88298_cap_bits[0]),
+            .sample_rates = aw88298_cap_rates,
+            .sample_rate_num = sizeof(aw88298_cap_rates) / sizeof(aw88298_cap_rates[0]),
+        },
+    };
+    caps[0] = dac_caps;
+    *count = 1;
+    return ESP_CODEC_DEV_OK;
+}
+
 const audio_codec_if_t *aw88298_codec_new(aw88298_codec_cfg_t *codec_cfg)
 {
     if (codec_cfg == NULL || codec_cfg->ctrl_if == NULL) {
@@ -384,6 +421,7 @@ const audio_codec_if_t *aw88298_codec_new(aw88298_codec_cfg_t *codec_cfg)
     codec->base.hw_base.get_reg = aw88298_get_reg;
     codec->base.hw_base.dump_reg = aw88298_dump;
     codec->base.hw_base.close = aw88298_close;
+    codec->base.hw_base.get_caps = aw88298_get_caps;
     codec->base.ctrl_if = codec_cfg->ctrl_if;
 
     codec->dac_ops.ops.enable = aw88298_enable;

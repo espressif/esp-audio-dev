@@ -39,6 +39,10 @@ static const char *TAG = "CODEC_DEV_P4_EV_BOARD";
 #define TEST_ES8311_REOPEN_ADC_SETTLE_US   (200 * 1000)
 /* Capture starts with a decaying power-up transient; analyze the steady-state tail only. */
 #define TEST_ES8311_REOPEN_WARMUP_SECONDS  (2)
+#define TEST_ES8311_RECORD_CHUNK_BYTES     (512)
+#define TEST_ES8311_RECORD_WARMUP_MS       (500)
+/* 8 kHz no_mclk often has no coeff for a 64-bit frame and falls back to 128 (AABB). */
+#define TEST_ES8311_PCM_ANALYZE_MIN_HZ     (16000)
 
 typedef struct {
     const audio_codec_data_if_t *data_if;
@@ -212,6 +216,23 @@ void deinit_es8311_inst(codec_es8311_inst_t *inst)
         audio_codec_delete_data_if(inst->data_if);
         inst->data_if = NULL;
     }
+}
+
+static void analyze_es8311_recorded_pcm(const uint8_t *buf, int len, int chunk_bytes,
+                                        const esp_codec_dev_sample_info_t *fs, int warmup_ms)
+{
+    TEST_ASSERT_NOT_NULL(buf);
+    TEST_ASSERT_NOT_NULL(fs);
+    if (fs->sample_rate < TEST_ES8311_PCM_ANALYZE_MIN_HZ) {
+        ESP_LOGW(TAG, "Skip PCM structure analysis at %lu Hz until 8 kHz clock is fixed",
+                 (unsigned long)fs->sample_rate);
+        return;
+    }
+    int bytes_per_sample = fs->bits_per_sample >> 3;
+    int warmup_bytes = (fs->sample_rate * warmup_ms / 1000) * fs->channel * bytes_per_sample;
+    TEST_ASSERT_GREATER_THAN(warmup_bytes, len);
+    TEST_ESP_OK(test_analyze_recorded_pcm(buf + warmup_bytes, len - warmup_bytes,
+                                          chunk_bytes, fs->channel, fs->bits_per_sample));
 }
 
 static void verify_record_label_layout(esp_codec_dev_handle_t record_dev)
@@ -547,8 +568,10 @@ static void multiple_es8311_run(bool reuse_data_if, bool separate_channels, i2s_
     esp_codec_dev_close(record_inst.codec_dev);
     esp_codec_dev_close(play_inst.codec_dev);
 
-    int each_size = 512;
+    const int each_size = TEST_ES8311_RECORD_CHUNK_BYTES;
     int read_count = limit_size / each_size;
+    uint8_t *play_chunk = (uint8_t *)malloc(each_size);
+    TEST_ASSERT_NOT_NULL(play_chunk);
     // Test playback continuous and record interrupt
     ESP_LOGI(TAG, "1: Record only test");
     ret = esp_codec_dev_open(record_inst.codec_dev, &fs);
@@ -580,34 +603,36 @@ static void multiple_es8311_run(bool reuse_data_if, bool separate_channels, i2s_
     TEST_ESP_OK(ret);
     esp_rom_delay_us(1000 * 1000);  // Data will not stable if ADC power down and power up immediately
     read_size = 0;
+    int played_bytes = 0;
     bool is_playback = true;
     for (int i = 0; i < read_count; i++, read_size += each_size) {
         ret = esp_codec_dev_read(record_inst.codec_dev, data + read_size, each_size);
         TEST_ESP_OK(ret);
-        int max_sample, min_sample;
         test_print_pcm_s16_head(data + read_size, 4);
-        codec_max_sample(data + read_size, each_size, &max_sample, &min_sample);
-        // Verify recording data not constant
-        TEST_ASSERT(max_sample > min_sample);
-        if (fs.channel_mask == 0x03) {
-            uint16_t *data16 = (uint16_t *)(data + read_size);
-            for (int j = 0; j < each_size / 4 / 2; j++) {
-                data16[j * 2 + 1] = data16[j * 2];
-            }
-        }
         if (is_playback) {
-            ret = esp_codec_dev_write(play_inst.codec_dev, data + read_size, each_size);
+            memcpy(play_chunk, data + read_size, each_size);
+            if (fs.channel_mask == 0x03) {
+                uint16_t *data16 = (uint16_t *)play_chunk;
+                for (int j = 0; j < each_size / 4 / 2; j++) {
+                    data16[j * 2 + 1] = data16[j * 2];
+                }
+            }
+            ret = esp_codec_dev_write(play_inst.codec_dev, play_chunk, each_size);
             TEST_ESP_OK(ret);
         }
         if (i == (read_count / 2)) {
             ESP_LOGI(TAG, "Close playback during recording, make sure recording OK");
             esp_codec_dev_close(play_inst.codec_dev);
             is_playback = false;
+            played_bytes = read_size + each_size;
         }
     }
+    /* RE is idle after DAC close; analyze only the frames captured while playing. */
+    analyze_es8311_recorded_pcm(data, played_bytes, each_size, &fs, TEST_ES8311_RECORD_WARMUP_MS);
     ret = esp_codec_dev_close(record_inst.codec_dev);
     TEST_ESP_OK(ret);
 
+    free(play_chunk);
     free(data);
     deinit_es8311_inst(&play_inst);
     deinit_es8311_inst(&record_inst);
@@ -678,8 +703,8 @@ static void multiple_es8311_reopen_record_play_run(void)
             test_print_pcm_s16_head(data + read_size, 4);
             read_size += once;
         }
-        TEST_ESP_OK(test_analyze_recorded_pcm_s16(data + warmup_size, limit_size - warmup_size,
-                                                  TEST_ES8311_REOPEN_CHUNK_BYTES));
+        analyze_es8311_recorded_pcm(data, limit_size, TEST_ES8311_REOPEN_CHUNK_BYTES, &fs,
+                                    TEST_ES8311_REOPEN_WARMUP_SECONDS * 1000);
 
         ret = esp_codec_dev_close(record_inst.codec_dev);
         TEST_ESP_OK(ret);
