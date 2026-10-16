@@ -19,10 +19,10 @@ variables:
         TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
         AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.1:1"
         AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
-    # No esp-env-master image yet: reuse v6.1 images and check out IDF master in the job
+    # IDF master (v6.2-dev) requires Python 3.11+ from the v6.2 CI images
     - master:
-        BUILD_IMAGE: "$CI_DOCKER_REGISTRY/esp-env-v6.1:1"
-        TEST_IMAGE: "$CI_DOCKER_REGISTRY/target-test-env-v6.1:1"
+        BUILD_IMAGE: "${CI_REGISTRY}/ci/images/idf-v6.2:2"
+        TEST_IMAGE: "${CI_REGISTRY}/ci/images/idf-v6.2-target-test:2"
         AUDIO_LOOPBACK_TEST_IMAGE: "$CI_DOCKER_REGISTRY/target_test_env_v6.1:1"
         AUDIO_LOOPBACK_PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
 

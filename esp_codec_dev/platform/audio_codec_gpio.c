@@ -19,6 +19,10 @@ static const char *TAG = "GPIO_IF";
 static int _gpio_cfg(int16_t gpio, audio_gpio_dir_t dir, audio_gpio_mode_t mode)
 {
     ESP_RETURN_ON_FALSE(gpio != -1, ESP_CODEC_DEV_INVALID_ARG, TAG, "Invalid gpio");
+    /* Pins beyond the SoC GPIO range belong to an IO expander and have no gpio_config. */
+    if (gpio >= GPIO_NUM_MAX) {
+        return ESP_CODEC_DEV_OK;
+    }
     gpio_config_t io_conf;
     memset(&io_conf, 0, sizeof(io_conf));
     io_conf.mode = (dir == AUDIO_GPIO_DIR_OUT ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT);

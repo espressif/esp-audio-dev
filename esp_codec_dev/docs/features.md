@@ -93,7 +93,7 @@ layout 由两层 map 信息合成：
 
 ## 5. 设备能力查询
 
-`esp_codec_dev_get_caps()` 用于在打开流之前查询设备支持的采样格式组合，返回值写入 `esp_codec_dev_capability_t` 数组。
+`esp_codec_dev_get_caps()` 用于在打开流之前查询设备支持的采样格式组合，返回值写入 `esp_codec_dev_capability_t` 数组。`name` 是 codec 型号，供展示使用；指针指向驱动内的静态字符串，调用方不释放。`NULL` 表示该驱动未提供名字。同一设备的每条 capability 使用同一个名字。
 
 | 模式 | 含义 |
 | --- | --- |

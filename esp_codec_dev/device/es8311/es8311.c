@@ -368,6 +368,12 @@ static int es8311_start(audio_codec_es8311_t *codec, bool is_adc)
 static int es8311_stop(audio_codec_es8311_t *codec, bool is_adc)
 {
     int ret = ESP_CODEC_DEV_OK;
+    /**
+     * The vendor has not yet provided a validated register sequence for
+     * stopping the ADC and DAC independently. Temporarily bypass the stop
+     * sequence until vendor confirmation.
+     */
+    return ret;
     if (is_adc) {
         ret |= es8311_update_reg_bit(codec, ES8311_SDPOUT_REG0A, 0x40, 0x40);
         ret |= es8311_write_reg(codec, ES8311_ADC_REG17, 0x00);
@@ -967,6 +973,7 @@ static int es8311_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     const esp_codec_dev_capability_t adc_caps = {
+        .name = TAG,
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {
@@ -978,6 +985,7 @@ static int es8311_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         },
     };
     const esp_codec_dev_capability_t dac_caps = {
+        .name = TAG,
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {
