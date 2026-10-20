@@ -232,6 +232,10 @@ typedef enum {
  *
  *         If a device exposes multiple disjoint fixed tuples or multiple independent flexible
  *         ranges, return multiple capability entries.
+ *
+ *         `name` points at a static codec name for display. The caller does not own or free it.
+ *         Every entry from the same device uses the same pointer. NULL means the driver did not
+ *         provide a name.
  */
 typedef struct {
     esp_codec_dev_type_t       dev_type;  /*!< Capability direction */
@@ -250,6 +254,7 @@ typedef struct {
             uint8_t         max_channels;     /*!< Maximum channel count on this direction */
         } flexible;                           /*!< Flexible capability lists */
     };
+    const char *name;  /*!< Codec name for display; caller does not own or free it */
 } esp_codec_dev_capability_t;
 
 /**

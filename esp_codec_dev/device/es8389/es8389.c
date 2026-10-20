@@ -1058,6 +1058,7 @@ static int es8389_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         return ESP_CODEC_DEV_INVALID_ARG;
     }
     const esp_codec_dev_capability_t adc_caps = {
+        .name = TAG,
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {
@@ -1069,6 +1070,7 @@ static int es8389_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_ty
         },
     };
     const esp_codec_dev_capability_t dac_caps = {
+        .name = TAG,
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {

@@ -476,6 +476,7 @@ static esp_err_t add_fixed_cap(codec_uac_role_state_t *st, const uac_host_dev_al
                                uint8_t alt_setting, uint32_t sample_rate)
 {
     esp_codec_dev_capability_t cap = {
+        .name = "UAC",
         .mode = ESP_CODEC_DEV_CAPS_MODE_FIXED,
         .fixed = {
             .channel = alt->channels,

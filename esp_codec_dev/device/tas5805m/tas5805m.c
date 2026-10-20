@@ -337,6 +337,7 @@ static int tas5805m_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_
         return ESP_CODEC_DEV_OK;
     }
     const esp_codec_dev_capability_t dac_caps = {
+        .name = TAG,
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {

@@ -597,6 +597,7 @@ static int chip_get_caps(const audio_hw_base_t *h, esp_codec_dev_type_t dev_type
         return ESP_CODEC_DEV_OK;
     }
     const esp_codec_dev_capability_t codec_caps = {
+        .name = TAG,
         .mode = ESP_CODEC_DEV_CAPS_MODE_FLEXIBLE,
         .flexible = {
             .max_channels = 2,

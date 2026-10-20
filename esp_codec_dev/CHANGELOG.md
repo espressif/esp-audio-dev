@@ -7,10 +7,13 @@
 - Added optional `audio_hw_base_t.set_sysclk` and `esp_codec_dev_sys_clk_info_t` so a codec can cache the committed I2S geometry (`sample_rate`, `mclk_hz`, `bclk_hz`, `total_slot`) before `set_fs`.
 - Added `esp_codec_dev_set_adc_label()` to update copied ADC channel labels while the input path is closed.
 - Implemented `audio_hw_base_t.get_caps` for ES7243, ES7243E, ES8156, ES8374, ES8388, AW88298, TAS5805M, ZL38063, and CJC8910.
+- Added `esp_codec_dev_capability_t.name` so `esp_codec_dev_get_caps()` can return a static codec name for display.
 
 ### Bug Fixed
 
 - Fixed repeated samples on ES8389 in `no_mclk` mode, where adjacent samples on the same channel had the same value. The codec clock now derives from the actual I2S frame width (`total_slot * slot_bit`) instead of the incorrect `bits_per_sample * 4`.
+- Fixed GPIO setup for pins beyond the SoC GPIO range. `audio_codec_new_gpio()` skips `gpio_config()` when the pin number is greater than or equal to `GPIO_NUM_MAX` and returns success, so an IO expander pin is not rejected.
+- Temporarily bypassed the ES8311 ADC/DAC independent stop sequences because the vendor has not yet provided a validated register configuration.
 
 ## v2.0.0-beta5
 
